@@ -5,10 +5,10 @@
 
 MODDIR=${0%/*}
 
-# Ensure config file permissions are correct after every boot
+# Ensure config file permissions are correct (0600 — root/Telegram only)
 if [ -f "$MODDIR/chat_hider.json" ]; then
     chown root:root "$MODDIR/chat_hider.json" 2>/dev/null
-    chmod 0644 "$MODDIR/chat_hider.json" 2>/dev/null
+    chmod 0600 "$MODDIR/chat_hider.json" 2>/dev/null
 fi
 
 # Ensure zygisk library permissions

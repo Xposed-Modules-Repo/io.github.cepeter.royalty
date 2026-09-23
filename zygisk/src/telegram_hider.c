@@ -58,6 +58,7 @@ struct hidden_config {
     int     tap_count;
     int64_t last_tap_ms;
     bool    revealed;
+    int64_t last_tap_event_id;  /* MotionEvent.getDownTime() to dedupe */
 };
 
 static struct hidden_config g_cfg;
@@ -73,6 +74,23 @@ static pthread_once_t g_jvm_once = PTHREAD_ONCE_INIT;
 /* NotificationCenter constant IDs (resolved at runtime via reflection) */
 static int g_nc_did_receive_new_messages = -1;
 static int g_nc_push_messages_updated = -1;
+
+/* Cached JNI IDs (resolved once in register_telegram_hooks, used in hot paths) */
+static jclass g_MotionEvent_cls = NULL;
+static jmethodID g_MotionEvent_getActionMasked = NULL;
+static jmethodID g_MotionEvent_getRawY = NULL;
+static jmethodID g_MotionEvent_getDownTime = NULL;
+
+static jclass g_ArrayList_cls = NULL;
+static jmethodID g_ArrayList_size = NULL;
+static jmethodID g_ArrayList_get = NULL;
+static jmethodID g_ArrayList_remove = NULL;
+
+static jclass g_Dialog_cls = NULL;
+static jfieldID g_Dialog_id = NULL;
+
+/* MotionEvent.ACTION_DOWN static int (resolved at registration) */
+static jint g_ActionDown = 0;
 
 /* ── Config loader (cJSON) ────────────── */
 
@@ -116,10 +134,12 @@ static void load_config(void) {
         cJSON *item;
         cJSON_ArrayForEach(item, arr) {
             if (idx >= MAX_HIDDEN) break;
-            if (cJSON_IsNumber(item)) {
+            if (cJSON_IsString(item)) {
+                g_cfg.hidden_ids[idx++] = strtoll(item->valuestring, NULL, 10);
+            } else if (cJSON_IsNumber(item)) {
+                /* Fallback for legacy numeric format — doubles lose precision
+                 * for IDs > 2^53, but we can't do better for that encoding. */
                 g_cfg.hidden_ids[idx++] = (int64_t)item->valuedouble;
-            } else if (cJSON_IsString(item)) {
-                g_cfg.hidden_ids[idx++] = (int64_t)strtoll(item->valuestring, NULL, 10);
             }
         }
         g_cfg.hidden_count = idx;
@@ -167,26 +187,17 @@ static bool should_hide_surface(const char *surf) {
 static void filter_dialogs_list(JNIEnv *env, jobject list, const char *surface) {
     if (!list) return;
 
-    jclass al = (*env)->FindClass(env, "java/util/ArrayList");
-    jmethodID sz = (*env)->GetMethodID(env, al, "size", "()I");
-    jmethodID getm = (*env)->GetMethodID(env, al, "get", "(I)Ljava/lang/Object;");
-    jmethodID remm = (*env)->GetMethodID(env, al, "remove", "(I)Ljava/lang/Object;");
-    if (!sz || !getm || !remm) return;
-
-    /* Cache full catalog before filtering */
-    jclass dlg_cls = (*env)->FindClass(env, "org/telegram/tgnet/TLRPC$Dialog");
-    jfieldID id_fid = dlg_cls ? (*env)->GetFieldID(env, dlg_cls, "id", "J") : NULL;
-
-    /* Build catalog from full list */
+    /* Build and cache catalog from full list */
     cJSON *arr = cJSON_CreateArray();
-    jint n = (*env)->CallIntMethod(env, list, sz);
+    jint n = (*env)->CallIntMethod(env, list, g_ArrayList_size);
     for (jint i = 0; i < n && i < 500; i++) {
-        jobject d = (*env)->CallObjectMethod(env, list, getm, i);
+        jobject d = (*env)->CallObjectMethod(env, list, g_ArrayList_get, i);
         if (d) {
-            jlong id_val = id_fid ? (*env)->GetLongField(env, d, id_fid) : 0;
+            jlong id_val = g_Dialog_id ? (*env)->GetLongField(env, d, g_Dialog_id) : 0;
             cJSON *entry = cJSON_CreateObject();
-            cJSON *id_item = cJSON_CreateNumber((double)id_val);
-            if (id_item) cJSON_AddItemToObject(entry, "id", id_item);
+            char id_str[32];
+            snprintf(id_str, sizeof(id_str), "%lld", (long long)id_val);
+            cJSON_AddStringToObject(entry, "id", id_str);
             cJSON_AddItemToArray(arr, entry);
             (*env)->DeleteLocalRef(env, d);
         }
@@ -202,22 +213,19 @@ static void filter_dialogs_list(JNIEnv *env, jobject list, const char *surface) 
 
     /* Filter if needed */
     if (g_cfg.revealed || !should_hide_surface(surface)) {
-        if (dlg_cls) (*env)->DeleteLocalRef(env, dlg_cls);
         return;
     }
 
     for (jint i = n - 1; i >= 0; i--) {
-        jobject d = (*env)->CallObjectMethod(env, list, getm, i);
+        jobject d = (*env)->CallObjectMethod(env, list, g_ArrayList_get, i);
         if (!d) continue;
-        jlong id_val = id_fid ? (*env)->GetLongField(env, d, id_fid) : 0;
+        jlong id_val = g_Dialog_id ? (*env)->GetLongField(env, d, g_Dialog_id) : 0;
         if (id_val != 0 && is_hidden((int64_t)id_val)) {
-            (*env)->CallObjectMethod(env, list, remm, i);
+            (*env)->CallObjectMethod(env, list, g_ArrayList_remove, i);
             LOGD("Filtered dialog %lld on %s", (long long)id_val, surface);
         }
         (*env)->DeleteLocalRef(env, d);
     }
-
-    if (dlg_cls) (*env)->DeleteLocalRef(env, dlg_cls);
 }
 
 /* ── Unix socket server (replaces dialogs.json) ─────────────── */
@@ -246,8 +254,12 @@ static void *socket_server_thread(void *arg) {
 
         struct ucred cred;
         socklen_t cl = sizeof(cred);
-        if (getsockopt(client, SOL_SOCKET, SO_PEERCRED, &cred, &cl) == 0 && cred.uid != 0) {
-            LOGW("Reject uid=%d", cred.uid); close(client); continue;
+        if (getsockopt(client, SOL_SOCKET, SO_PEERCRED, &cred, &cl) != 0) {
+            LOGW("getsockopt(SO_PEERCRED) failed — rejecting");
+            close(client); continue;
+        }
+        if (cred.uid != 0) {
+            LOGW("Reject uid=%d (non-root)", cred.uid); close(client); continue;
         }
 
         char req[32] = {0};
@@ -368,25 +380,25 @@ static jboolean (*orig_dispatch_touch)(jobject thiz, jobject event) = NULL;
 static jboolean hk_dispatch_touch(jobject thiz, jobject event) {
     JNIEnv *env = get_env();
 
-    if (env && event) {
-        jclass mc = (*env)->FindClass(env, "android/view/MotionEvent");
-        if (mc) {
-            jmethodID am = (*env)->GetStaticMethodID(env, mc, "getActionMasked", "(I)I");
-            jfieldID af = (*env)->GetStaticFieldID(env, mc, "ACTION_DOWN", "I");
-            jfieldID yf = (*env)->GetFieldID(env, mc, "mY", "F");
+    if (env && event && g_MotionEvent_cls &&
+        g_MotionEvent_getActionMasked && g_MotionEvent_getRawY) {
 
-            if (am && af) {
-                jint action_down = (*env)->GetStaticIntField(env, mc, af);
-                jint raw = (*env)->CallStaticIntMethod(env, mc, am, 0);
-                jint masked = raw & 0xFFF;
-                if (masked == action_down) {
-                    float y = yf ? (*env)->GetFloatField(env, event, yf) : 0;
-                    if (y >= 0 && y < 220.0f) {  /* header region */
-                        struct timespec ts;
-                        clock_gettime(CLOCK_MONOTONIC, &ts);
-                        int64_t now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+        jint masked = (*env)->CallIntMethod(env, event, g_MotionEvent_getActionMasked);
+        if (!(*env)->ExceptionCheck(env)) {
+            if (masked == g_ActionDown) {
+                float y = (*env)->CallFloatMethod(env, event, g_MotionEvent_getRawY);
+                /* Only count taps in the top header area (screen-relative Y) */
+                if (y >= 0.0f && y < 220.0f) {
+                    /* Use downTime to deduplicate — a single ACTION_DOWN can
+                       be dispatched to multiple Views in the hierarchy. */
+                    jlong down_time = (*env)->CallLongMethod(env, event, g_MotionEvent_getDownTime);
+                    struct timespec ts;
+                    clock_gettime(CLOCK_MONOTONIC, &ts);
+                    int64_t now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 
-                        pthread_mutex_lock(&g_cfg_mtx);
+                    pthread_mutex_lock(&g_cfg_mtx);
+                    if (down_time != g_cfg.last_tap_event_id) {
+                        g_cfg.last_tap_event_id = down_time;
                         if (now - g_cfg.last_tap_ms > TAP_WINDOW_MS)
                             g_cfg.tap_count = 0;
                         g_cfg.tap_count++;
@@ -396,11 +408,10 @@ static jboolean hk_dispatch_touch(jobject thiz, jobject event) {
                             g_cfg.revealed = !g_cfg.revealed;
                             LOGI("5-tap → reveal=%s", g_cfg.revealed ? "ON" : "OFF");
                         }
-                        pthread_mutex_unlock(&g_cfg_mtx);
                     }
+                    pthread_mutex_unlock(&g_cfg_mtx);
                 }
             }
-            (*env)->DeleteLocalRef(env, mc);
         }
     }
 
@@ -425,9 +436,48 @@ static void resolve_nc_constants(JNIEnv *env) {
          g_nc_did_receive_new_messages, g_nc_push_messages_updated);
 }
 
-/* ── Hook registration (ART entry-point replacement) ────────── */
+/* ── Cache JNI IDs for hot-path hooks ────────── */
+
+static void cache_jni_ids(JNIEnv *env) {
+    jclass c;
+
+    c = (*env)->FindClass(env, "android/view/MotionEvent");
+    if (c) {
+        g_MotionEvent_cls = (jclass)(*env)->NewGlobalRef(env, c);
+        g_MotionEvent_getActionMasked = (*env)->GetMethodID(env, c, "getActionMasked", "()I");
+        g_MotionEvent_getRawY = (*env)->GetMethodID(env, c, "getRawY", "()F");
+        g_MotionEvent_getDownTime = (*env)->GetMethodID(env, c, "getDownTime", "()J");
+        jfieldID af = (*env)->GetStaticFieldID(env, c, "ACTION_DOWN", "I");
+        if (af) g_ActionDown = (*env)->GetStaticIntField(env, c, af);
+        (*env)->DeleteLocalRef(env, c);
+    }
+
+    c = (*env)->FindClass(env, "java/util/ArrayList");
+    if (c) {
+        g_ArrayList_cls = (jclass)(*env)->NewGlobalRef(env, c);
+        g_ArrayList_size = (*env)->GetMethodID(env, c, "size", "()I");
+        g_ArrayList_get = (*env)->GetMethodID(env, c, "get", "(I)Ljava/lang/Object;");
+        g_ArrayList_remove = (*env)->GetMethodID(env, c, "remove", "(I)Ljava/lang/Object;");
+        (*env)->DeleteLocalRef(env, c);
+    }
+
+    c = (*env)->FindClass(env, "org/telegram/tgnet/TLRPC$Dialog");
+    if (c) {
+        g_Dialog_cls = (jclass)(*env)->NewGlobalRef(env, c);
+        g_Dialog_id = (*env)->GetFieldID(env, c, "id", "J");
+        (*env)->DeleteLocalRef(env, c);
+    }
+
+    if (g_MotionEvent_getActionMasked && g_ArrayList_size && g_Dialog_id)
+        LOGI("JNI ID cache: OK (MotionEvent/ArrayList/Dialogs)");
+    else
+        LOGW("JNI ID cache: partial (some classes not found in this Telegram build)");
+}
 
 static void register_telegram_hooks(JNIEnv *env) {
+    /* Cache JNI IDs used in hot-path hooks (touch events, dialog filtering) */
+    cache_jni_ids(env);
+
     /* 1. MessagesController.getDialogs(int) → ArrayList  */
     if (art_hook_method(env,
         "org/telegram/messenger/MessagesController",

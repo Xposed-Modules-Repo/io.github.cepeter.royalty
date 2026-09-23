@@ -45,19 +45,21 @@ function loadConfig(callback) {
         } catch(e) {
             cfg = {};
         }
-        // Merge with defaults
+        // Merge with defaults, normalize selected_dialogs to strings
         const result = Object.assign({}, DEFAULT_CONFIG, cfg);
+        result.selected_dialogs = (cfg.selected_dialogs || []).map(function(id) {
+            return String(id);
+        });
         callback(result);
     });
 }
 
 function saveConfig(cfg, callback) {
     const json = JSON.stringify(cfg, null, 2);
-    // Write config with 0600 (owner-only) permissions — not 0644
-    // Use a heredoc to handle special characters in chat IDs safely
-    const cmd = "cat > '" + CONFIG_FILE + "' <<'HEREDOC_END'\\n" +
-                json + "\\nHEREDOC_END\\n" +
-                "chmod 0600 '" + CONFIG_FILE + "'";
+    /* Write config with 0600 (owner-only) permissions.
+     * Use printf to avoid heredoc/newline escaping issues. */
+    const jsonEscaped = String(json).replace(/'/g, "'\\''");
+    const cmd = "printf '%s' '" + jsonEscaped + "' > '" + CONFIG_FILE + "' && chmod 0600 '" + CONFIG_FILE + "'";
     exec(cmd, function(code, stdout, stderr) {
         callback(code === 0 || code === "0");
     });
@@ -66,14 +68,11 @@ function saveConfig(cfg, callback) {
 /* ── Dialog catalog via Unix domain socket ─────────────── */
 
 /*
- * Instead of reading a plaintext dialogs.json file from disk, we connect
- * to a Unix domain socket created by the native Zygisk module inside
- * Telegram's process.  The socket verifies peer credentials (SO_PEERCRED)
- * — only root can connect — and the native side sends a length-prefixed
- * JSON catalog.
- *
- * This fixes SEC-03 (plaintext catalog leakage on disk).
- * If Telegram is not running, the socket won't exist and we show a hint.
+ * The native Zygisk module listens on a Unix domain socket (SOCK_PATH).
+ * It requires SO_PEERCRED uid=0 (root) — the socket is chmod 0600.
+ * On connection, the server sends a JSON array of dialog objects:
+ *   [{"id":"1234567890123456789"}]
+ * If Telegram is not running, the socket doesn't exist and we show a hint.
  */
 function loadDialogs(callback) {
     // Try connecting to the Unix socket first
@@ -180,14 +179,14 @@ function renderChats() {
     window._chatsLoaded = true;
 
     container.innerHTML = filteredDialogs.map(d => {
-        const id = d.id || d.dialog_id || d.id_str;
+        const id = String(d.id || d.dialog_id || d.id_str || "");
         const name = d.name || d.title || d.username || ("Chat " + id);
-        const type = d.type || "";
+        const type = String(d.type || "");
         const checked = selectedIds.has(id);
-        return `<div class="chat-item" onclick="toggleChat('${id}')">
+        return `<div class="chat-item" onclick="toggleChat('${escapeHtml(id)}')">
             <div class="chat-checkbox ${checked ? 'checked' : ''}"></div>
             <div class="chat-name">${escapeHtml(name)}</div>
-            <div class="chat-id">${escapeHtml(id)}${type ? ' · ' + type : ''}</div>
+            <div class="chat-id">${escapeHtml(id)}${type ? ' · ' + escapeHtml(type) : ''}</div>
         </div>`;
     }).join('');
 }
@@ -202,7 +201,7 @@ function toggleChat(id) {
 }
 
 function escapeHtml(s) {
-    return s.replace(/[&<>"']/g, c => {
+    return String(s || "").replace(/[&<>"']/g, c => {
         const m = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
         return m[c];
     });
@@ -213,8 +212,8 @@ function escapeHtml(s) {
 function filterChats() {
     const q = document.getElementById("chat-search").value.toLowerCase();
     filteredDialogs = allDialogs.filter(d => {
-        const name = (d.name || d.title || d.username || "").toLowerCase();
-        const id = (d.id || d.dialog_id || "").toLowerCase();
+        const name = String(d.name || d.title || d.username || "").toLowerCase();
+        const id = String(d.id || d.dialog_id || d.id_str || "").toLowerCase();
         return name.includes(q) || id.includes(q);
     });
     renderChats();
