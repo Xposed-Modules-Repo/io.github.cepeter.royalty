@@ -1,4 +1,13 @@
 <resources>
     <string name="app_name">Telegram Chat Hider</string>
     <string name="xposed_description">Hide selected Telegram dialogs with Vector or LSPosed.</string>
+    <string name="supported_scope">Main dialog list and new-message notifications are supported. Search, share picker, and new-group screens are not hidden.</string>
+    <string name="hook_status">Hook status</string>
+    <string name="open_telegram_first">Open Telegram once, then return here and refresh.</string>
+    <string name="refresh">Refresh</string>
+    <string name="save">Save</string>
+    <string name="suppress_notifications">Suppress new-message notifications for hidden dialogs</string>
+    <string name="refresh_hint">Open Telegram to refresh the catalog. Configuration reloads within one second; switch folders or restart Telegram to redraw the list.</string>
+    <string name="framework_inactive">Vector or LSPosed is not active for this module. Enable the module, scope Telegram, and restart both apps.</string>
+    <string name="save_failed">Configuration could not be saved.</string>
 </resources>

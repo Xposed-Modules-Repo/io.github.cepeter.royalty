@@ -58,7 +58,18 @@ public final class CatalogRepository {
         return entries;
     }
 
-    public Map<String, ?> loadStatus() {
-        return preferences.getAll();
+    public Map<String, String> loadHookStatuses() {
+        Map<String, String> statuses = new java.util.TreeMap<>();
+        for (Map.Entry<String, ?> stored : preferences.getAll().entrySet()) {
+            if (!stored.getKey().startsWith(STATUS_PREFIX)
+                    || !(stored.getValue() instanceof String)) {
+                continue;
+            }
+            String hook = stored.getKey().substring(STATUS_PREFIX.length());
+            if (!hook.contains(".")) {
+                statuses.put(hook, (String) stored.getValue());
+            }
+        }
+        return statuses;
     }
 }

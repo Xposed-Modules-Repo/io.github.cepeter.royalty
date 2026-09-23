@@ -3,6 +3,7 @@ package io.github.cepeter.telegramhider.config;
 import android.content.Context;
 import android.content.SharedPreferences;
 import io.github.cepeter.telegramhider.core.DialogKey;
+import io.github.cepeter.telegramhider.core.HiddenConfig;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -16,6 +17,15 @@ public final class ConfigStore {
     @SuppressWarnings("deprecation")
     public static SharedPreferences open(Context context) {
         return context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_WORLD_READABLE);
+    }
+
+    public static HiddenConfig load(Context context) {
+        SharedPreferences preferences = open(context);
+        Set<String> stored = preferences.getStringSet(HIDDEN_DIALOGS, java.util.Collections.emptySet());
+        Set<String> snapshot = stored == null ? java.util.Collections.emptySet() : new HashSet<>(stored);
+        return HiddenConfig.fromStrings(
+                snapshot,
+                preferences.getBoolean(SUPPRESS_NOTIFICATIONS, true));
     }
 
     public static boolean save(
