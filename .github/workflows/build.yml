@@ -5,58 +5,64 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+  release:
+    types: [published]
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: false
 
-      - name: Install NDK
+      - name: Download Android NDK
         run: |
-          sudo apt-get update
-          sudo apt-get install -y wget unzip
           wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip -O /tmp/ndk.zip
           unzip -q /tmp/ndk.zip -d /tmp
           echo "ANDROID_NDK_HOME=/tmp/android-ndk-r26d" >> $GITHUB_ENV
+          echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
-      - name: Set up standalone toolchain
+      - name: Build Zygisk library (arm64-v8a)
+        env:
+          CC: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
         run: |
-          $ANDROID_NDK_HOME/build/tools/make_standalone_toolchain.py \
-            --arch arm64 --api 26 --install-dir /tmp/aarch64-linux-android
-          $ANDROID_NDK_HOME/build/tools/make_standalone_toolchain.py \
-            --arch arm --api 26 --install-dir /tmp/armv7a-linux-androideabi
-          echo "PATH=$PATH:/tmp/aarch64-linux-android/bin:/tmp/armv7a-linux-androideabi/bin" >> $GITHUB_ENV
+          mkdir -p zygisk/lib/arm64-v8a
+          $CC -shared -fPIC -O2 -Wall \
+            -I zygisk/src \
+            -o zygisk/lib/arm64-v8a/libtelegram_hider.so \
+            zygisk/src/telegram_hider.c
 
-      - name: Build Zygisk libs
+      - name: Build Zygisk library (armeabi-v7a)
+        env:
+          CC: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi26-clang
         run: |
-          cd zygisk
-          # Build arm64
-          aarch64-linux-android-clang \
-            --target=aarch64-linux-android \
-            -shared -fPIC -O2 \
-            -I include \
-            -o lib/arm64-v8a/libtelegram_hider.so \
-            src/telegram_hider.c
-          # Build armeabi-v7a
-          armv7a-linux-androideabi-clang \
-            --target=armv7a-linux-androideabi \
-            -shared -fPIC -O2 \
-            -I include \
-            -o lib/armeabi-v7a/libtelegram_hider.so \
-            src/telegram_hider.c
+          mkdir -p zygisk/lib/armeabi-v7a
+          $CC -shared -fPIC -O2 -Wall -marm \
+            -I zygisk/src \
+            -o zygisk/lib/armeabi-v7a/libtelegram_hider.so \
+            zygisk/src/telegram_hider.c
 
-      - name: Package module
+      - name: Assemble module
         run: |
           mkdir -p module/zygisk/arm64-v8a module/zygisk/armeabi-v7a
           cp zygisk/lib/arm64-v8a/libtelegram_hider.so module/zygisk/arm64-v8a/
           cp zygisk/lib/armeabi-v7a/libtelegram_hider.so module/zygisk/armeabi-v7a/
-          VERSION=$(grep versionCode module/module.prop | cut -d= -f2)
-          NAME=$(grep '^id=' module/module.prop | cut -d= -f2)
-          zip -r "module-${NAME}-v${{ github.ref_name }}.zip" module/
-          cp "module-${NAME}-v${{ github.ref_name }}.zip" /tmp/
 
-      - uses: actions/upload-artifact@v4
+      - name: Package ZIP
+        run: |
+          VERSION=$(grep '^versionCode=' module/module.prop | cut -d= -f2)
+          NAME=$(grep '^id=' module/module.prop | cut -d= -f2)
+          rm -f "/tmp/${NAME}-v${VERSION}.zip"
+          (cd module/.. && zip -r "/tmp/${NAME}-v${VERSION}.zip" module/)
+          ls -la /tmp/${NAME}-v${VERSION}.zip
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
         with:
-          name: module-zip
-          path: /tmp/module-*.zip
+          files: /tmp/telegram_chat_hider-v*.zip
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

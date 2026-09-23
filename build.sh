@@ -35,7 +35,6 @@ fi
 HOST_TAG=$(ls "$TC_TOOLCHAIN" | head -1)
 TC_PATH="$TC_TOOLCHAIN/$HOST_TAG"
 CLANG="$TC_PATH/bin/clang"
-CLANG_PREFIX="$TC_PATH/bin"
 
 echo "NDK: $ANDROID_NDK_HOME"
 echo "Clang: $CLANG"
@@ -44,22 +43,19 @@ echo "Clang: $CLANG"
 echo "Building arm64-v8a..."
 mkdir -p "$ZIGISK_DIR/lib/arm64-v8a"
 "$CLANG" --target=aarch64-linux-android26 \
-    -shared -fPIC -O2 \
+    -shared -fPIC -O2 -Wall -Wextra \
     -I "$ZIGISK_DIR/src" \
     -o "$ZIGISK_DIR/lib/arm64-v8a/libtelegram_hider.so" \
-    "$ZIGISK_DIR/src/telegram_hider.c" \
-    -llog
+    "$ZIGISK_DIR/src/telegram_hider.c"
 
 # --- Build for armeabi-v7a --------------------------------------------------
 echo "Building armeabi-v7a..."
 mkdir -p "$ZIGISK_DIR/lib/armeabi-v7a"
 "$CLANG" --target=armv7a-linux-androideabi26 \
-    -shared -fPIC -O2 \
-    -marm \
+    -shared -fPIC -O2 -Wall -Wextra -marm \
     -I "$ZIGISK_DIR/src" \
     -o "$ZIGISK_DIR/lib/armeabi-v7a/libtelegram_hider.so" \
-    "$ZIGISK_DIR/src/telegram_hider.c" \
-    -llog
+    "$ZIGISK_DIR/src/telegram_hider.c"
 
 # --- Copy .so files into module/zygisk/ ------------------------------------
 echo "Assembling module..."
@@ -75,4 +71,4 @@ rm -f "$ZIP_NAME"
 
 echo ""
 echo "✓ Module zip built: $ZIP_NAME"
-echo "  Flash this zip via APatch Manager → Modules → Install from storage"
+echo "  Flash via APatch Manager → Modules → Install from storage"
