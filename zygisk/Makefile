@@ -23,6 +23,7 @@ CFLAGS  := -std=c11 -Wall -Wextra -O2 -fPIC
 CFLAGS  += -I$(CURDIR)/src
 CFLAGS  += -I$(NDK)/sources/android/native_app_glue
 CFLAGS  += -DREZYGISK_API_VERSION=5
+CFLAGS  += -D_GNU_SOURCE
 
 LDFLAGS := -shared -Wl,--strip-all
 

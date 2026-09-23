@@ -1,25 +1,15 @@
 # ============================================================ #
 #  SELinux policy rules for Telegram Chat Hider               #
+#  Minimal — only allow zygote to load our Zygisk module.       #
 # ============================================================ #
 
-# Allow zygote (where MeowZygisk runs) to read module files
-type telegram_chat_hider_file file_type
-typeattribute telegram_chat_hider_file mlstrustedobject
-allow zygote telegram_chat_hider_file file {read open getattr}
-allow zygote telegram_chat_hider_file dir search
+# Module file type
+type telegram_chat_hider_file file_type;
 
-# Allow system_server to access WebUI (for APatch's root shell bridge)
-allow system_server adb_data_file file *
-allow system_server adb_data_file dir search
+# Zygote needs to read the module libraries and config (MeowZygisk loads .so here)
+allow zygote telegram_chat_hider_file dir search;
+allow zygote telegram_chat_hider_file file { read open getattr };
 
-# Allow the WebUI's root shell to read/write config
-allow shell telegram_chat_hider_file file *
-allow shell telegram_chat_hider_file dir *
-
-# Allow untrusted_app (Telegram) to read config at runtime
-# Telegram process reads chat_hider.json via the Zygisk library
-allow untrusted_app telegram_chat_hider_file file {read open getattr}
-allow untrusted_app telegram_chat_hider_file dir search
-
-# Allow file-based config updates
-allow shell adb_data_file file *
+# Shell (root) for WebUI config read/write via window.android.exec()
+allow shell telegram_chat_hider_file dir { search add remove write };
+allow shell telegram_chat_hider_file file { read write open getattr setattr };

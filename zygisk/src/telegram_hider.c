@@ -147,7 +147,7 @@ static void export_dialogs(JNIEnv *env, jobject dialog_list) {
     snprintf(path, sizeof(path), "%s/" DIALOGS_FILE,
              g_module_dir[0] ? g_module_dir : "/data/adb/modules/telegram_chat_hider");
 
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         LOGW("Cannot write dialogs catalog to %s", path);
         return;
@@ -245,7 +245,11 @@ static bool should_hide(const char *id_str, const char *surface) {
 /* ── Five-tap reveal ───────────────────────────────────── */
 
 static bool check_reveal_gesture(void) {
-    long now = (long)(time(NULL) * 1000);
+    /* Use monotonic clock for accurate timing (NOT time(NULL) which
+     * has 1s resolution and crosses second boundaries unpredictably) */
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    long now = (long)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
     if (now - g_cfg.last_tap_ms > TAP_WINDOW_MS)
         g_cfg.tap_count = 0;
     g_cfg.tap_count++;
@@ -266,114 +270,131 @@ static void *orig_get_dialogs = NULL;
 static void *orig_load_dialogs = NULL;
 static void *orig_dispatch_touch = NULL;
 
-/* ── Hook: MessagesStorage.loadDialogs(II) ──────────────── */
+/*
+ * Replacement for a JNI native method returning ArrayList<Dialog>.
+ *
+ * We hook whichever Dialogs-loading native method Telegram exposes.
+ * The exact method name/signature varies by Telegram version, so we
+ * register multiple candidates and only the one that exists will bind.
+ *
+ * On each call we:
+ *   1. Export the full dialog catalog (for WebUI selector)
+ *   2. Return a NEW filtered ArrayList (do not mutate Telegram's list)
+ */
+
+/* Helper: create a new ArrayList excluding hidden dialogs */
+static jobject filter_dialogs_list(JNIEnv *env, jobject orig_list,
+                                    const char *surface) {
+    if (!orig_list) return NULL;
+
+    jclass al_cls = (*env)->FindClass(env, "java/util/ArrayList");
+    if (!al_cls) return orig_list;
+
+    jmethodID mid_init  = (*env)->GetMethodID(env, al_cls, "<init>", "(I)V");
+    jmethodID mid_add   = (*env)->GetMethodID(env, al_cls, "add", "(Ljava/lang/Object;)Z");
+    jmethodID mid_size  = (*env)->GetMethodID(env, al_cls, "size", "()I");
+    jmethodID mid_get   = (*env)->GetMethodID(env, al_cls, "get", "(I)Ljava/lang/Object;");
+
+    /* If no filtering needed, return original */
+    if (g_cfg.revealed) return orig_list;
+    bool any_surface = g_cfg.hide_in_list || g_cfg.hide_in_search ||
+                       g_cfg.hide_in_share;
+    if (!any_surface) return orig_list;
+
+    jclass dialog_cls = (*env)->FindClass(env, "org/telegram/tgnet/TLRPC$Dialog");
+    if (!dialog_cls) {
+        LOGW("TLRPC$Dialog class not found");
+        return orig_list;
+    }
+    jfieldID fid_id = (*env)->GetFieldID(env, dialog_cls, "id", "J");
+    if (!fid_id) {
+        LOGW("Dialog.id field not found");
+        return orig_list;
+    }
+
+    int sz = (*env)->CallIntMethod(env, orig_list, mid_size);
+
+    /* Always export full catalog for WebUI */
+    export_dialogs(env, orig_list);
+
+    /* Quick check: any dialogs actually hidden? */
+    bool need_filter = false;
+    for (int i = 0; i < sz; i++) {
+        jobject d = (*env)->CallObjectMethod(env, orig_list, mid_get, i);
+        if (d) {
+            jlong id_val = (*env)->GetLongField(env, d, fid_id);
+            char id_str[MAX_DIALOG_LEN];
+            snprintf(id_str, sizeof(id_str), "%lld", (long long)id_val);
+            if (should_hide(id_str, surface)) {
+                need_filter = true;
+                (*env)->DeleteLocalRef(env, d);
+                break;
+            }
+            (*env)->DeleteLocalRef(env, d);
+        }
+    }
+
+    if (!need_filter) return orig_list;
+
+    /* Create a filtered copy — do NOT mutate Telegram's list */
+    jobject filtered = (*env)->NewObject(env, al_cls, mid_init, sz);
+    if (!filtered) return orig_list;
+
+    for (int i = 0; i < sz; i++) {
+        jobject d = (*env)->CallObjectMethod(env, orig_list, mid_get, i);
+        if (!d) continue;
+        jlong id_val = (*env)->GetLongField(env, d, fid_id);
+        char id_str[MAX_DIALOG_LEN];
+        snprintf(id_str, sizeof(id_str), "%lld", (long long)id_val);
+        if (should_hide(id_str, surface)) {
+            LOGD("Hiding dialog %s on %s surface", id_str, surface);
+        } else {
+            (*env)->CallBooleanMethod(env, filtered, mid_add, d);
+        }
+        (*env)->DeleteLocalRef(env, d);
+    }
+
+    /* Clear any pending exception from failed JNI calls */
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+
+    return filtered;
+}
+
+/* ── Hook wrappers: call original, then filter ────────────── */
 
 /*
- * Replacement for MessagesStorage.loadDialogs(II)Ljava/util/ArrayList;
- *
- * Fallback hook — if MessagesController.getDialogs() is not a JNI
- * native method, this native storage method still feeds the dialog
- * list.  Filter hidden dialogs here as well.
+ * hk_get_dialogs — hook for MessagesController.getDialogs()
+ * Signature varies by version: getDialogs() or getDialogs(I)
+ * We handle the no-arg case; if signature mismatches, the hook
+ * simply won't bind (MeowZygisk silently skips non-matching methods).
+ */
+static jobject JNICALL hk_get_dialogs(JNIEnv *env, jobject thiz) {
+    if (!orig_get_dialogs) {
+        LOGW("orig_get_dialogs is NULL — hook not properly installed");
+        return NULL;
+    }
+    jobject list = ((jobject (*)(JNIEnv*, jobject))orig_get_dialogs)(env, thiz);
+    if (!list) return NULL;
+    return filter_dialogs_list(env, list, "list");
+}
+
+/*
+ * hk_load_dialogs — hook for MessagesStorage.loadDialogs(II)
+ * This is the native storage-layer entry point for dialog loading.
+ * May not exist as JNI on all Telegram versions; hook is best-effort.
  */
 static jobject JNICALL hk_load_dialogs(JNIEnv *env, jobject thiz,
                                         jint offset, jint count) {
-    jobject list = NULL;
-
-    if (orig_load_dialogs) {
-        list = ((jobject (*)(JNIEnv*, jobject, jint, jint))orig_load_dialogs)
-               (env, thiz, offset, count);
-    }
-
-    if (!list) return NULL;
-
-    /* Export catalog for WebUI */
-    export_dialogs(env, list);
-
-    if (!g_cfg.hide_in_list || g_cfg.revealed)
-        return list;
-
-    /* Filter hidden dialogs */
-    jclass al_cls = (*env)->FindClass(env, "java/util/ArrayList");
-    jmethodID mid_remove = (*env)->GetMethodID(env, al_cls, "remove", "(I)Ljava/lang/Object;");
-    jmethodID mid_get    = (*env)->GetMethodID(env, al_cls, "get", "(I)Ljava/lang/Object;");
-    jmethodID mid_size   = (*env)->GetMethodID(env, al_cls, "size", "()I");
-
-    jclass dialog_cls = (*env)->FindClass(env, "org/telegram/tgnet/TLRPC$Dialog");
-    jfieldID fid_id = (*env)->GetFieldID(env, dialog_cls, "id", "J");
-
-    int sz = (*env)->CallIntMethod(env, list, mid_size);
-    for (int i = sz - 1; i >= 0; i--) {
-        jobject dialog = (*env)->CallObjectMethod(env, list, mid_get, i);
-        jlong id_val = (*env)->GetLongField(env, dialog, fid_id);
-        char id_str[MAX_DIALOG_LEN];
-        snprintf(id_str, sizeof(id_str), "%lld", (long long)id_val);
-
-        if (is_dialog_hidden(id_str)) {
-            (*env)->CallObjectMethod(env, list, mid_remove, i);
-        }
-        (*env)->DeleteLocalRef(env, dialog);
-    }
-
-    return list;
-}
-
-/* ── Hook: MessagesController.getDialogs() ──────────────── */
-
-/*
- * Replacement for MessagesController.getDialogs()Ljava/util/ArrayList;
- *
- * This is the primary hook point.  Telegram's MessagesController
- * holds the dialog list as ArrayList<Dialog>.  We intercept
- * the getter to filter hidden dialogs.
- *
- * The method may have different signatures across Telegram versions:
- *   - getDialogs() → ArrayList<Dialog>  (most common)
- */
-static jobject JNICALL hk_get_dialogs(JNIEnv *env, jobject thiz) {
-    jobject list = NULL;
-
-    /* Call original */
-    if (orig_get_dialogs) {
-        list = ((jobject (*)(JNIEnv*, jobject))orig_get_dialogs)(env, thiz);
-    } else {
-        LOGW("orig_get_dialogs is NULL");
+    if (!orig_load_dialogs) {
+        LOGW("orig_load_dialogs is NULL — hook not properly installed");
         return NULL;
     }
-
-    if (list == NULL) return NULL;
-
-    /* Export full catalog for WebUI (before filtering) */
-    export_dialogs(env, list);
-
-    if (!g_cfg.hide_in_list || g_cfg.revealed) {
-        return list;
-    }
-
-    /* Filter hidden dialogs from the list (list surface) */
-    jclass al_cls = (*env)->FindClass(env, "java/util/ArrayList");
-    jmethodID mid_remove = (*env)->GetMethodID(env, al_cls, "remove", "(I)Ljava/lang/Object;");
-    jmethodID mid_get    = (*env)->GetMethodID(env, al_cls, "get", "(I)Ljava/lang/Object;");
-    jmethodID mid_size   = (*env)->GetMethodID(env, al_cls, "size", "()I");
-
-    jclass dialog_cls = (*env)->FindClass(env, "org/telegram/tgnet/TLRPC$Dialog");
-    jfieldID fid_id = (*env)->GetFieldID(env, dialog_cls, "id", "J");
-
-    int sz = (*env)->CallIntMethod(env, list, mid_size);
-    for (int i = sz - 1; i >= 0; i--) {
-        jobject dialog = (*env)->CallObjectMethod(env, list, mid_get, i);
-        jlong id_val = (*env)->GetLongField(env, dialog, fid_id);
-        char id_str[MAX_DIALOG_LEN];
-        snprintf(id_str, sizeof(id_str), "%lld", (long long)id_val);
-
-        if (is_dialog_hidden(id_str)) {
-            (*env)->CallObjectMethod(env, list, mid_remove, i);
-            LOGD("Hidden dialog %s from list", id_str);
-        }
-
-        (*env)->DeleteLocalRef(env, dialog);
-    }
-
-    return list;
+    jobject list = ((jobject (*)(JNIEnv*, jobject, jint, jint))orig_load_dialogs)
+                   (env, thiz, offset, count);
+    if (!list) return NULL;
+    return filter_dialogs_list(env, list, "list");
 }
 
 /* ── Hook: Header touch for 5-tap gesture ──────────────── */
@@ -430,42 +451,65 @@ static jboolean JNICALL hk_dispatch_touch(JNIEnv *env, jobject thiz, jobject eve
 
 static void register_telegram_hooks(struct rezygisk_api *api, JNIEnv *env) {
     /*
-     * Telegram's dialog loading pipeline has multiple hook points.
-     * We register hooks for all known method names across versions.
+     * Zygisk hook strategy:
      *
-     * Hook 1: MessagesController.getDialogs()
-     *   This is a Java method but may delegate to native code.
-     *   If it's registered as a JNI native method, this will succeed.
+     * hook_jni_native_methods only works on methods that are REGISTERED
+     * as JNI native methods (via JNIEnv::RegisterNatives).  Telegram's
+     * MessagesController.getDialogs() and View.dispatchTouchEvent are
+     * pure Java methods — they will NOT be hooked.
+     *
+     * We register best-effort hooks on known JNI native methods that
+     * exist in some Telegram versions.  For methods that are not JNI
+     * native, the hook silently fails (MeowZygisk skips non-matching).
+     *
+     * After the call, fnPtr holds the ORIGINAL function pointer.
+     * We MUST capture it before using it in our replacement.
      */
+
+    /* Hook 1: MessagesStorage.getDialogs (JNI native, version-dependent) */
     JNINativeMethod m1 = {
-        "getDialogs", "()Ljava/util/ArrayList;",
+        "getDialogs", "(I)Ljava/util/ArrayList;",
         (void*)hk_get_dialogs
     };
     api->hook_jni_native_methods(env,
-        "org/telegram/messenger/MessagesController", &m1, 1);
+        "org/telegram/messenger/MessagesStorage", &m1, 1);
+    /* Capture original — m1.fnPtr is set by hook_jni_native_methods */
+    orig_get_dialogs = m1.fnPtr;
+    if (!orig_get_dialogs) {
+        LOGW("getDialogs hook not bound (not a JNI native method)");
+    } else {
+        LOGI("Hooked MessagesStorage.getDialogs()");
+    }
 
-    /*
-     * Hook 2: MessagesStorage.loadDialogs(II)Ljava/util/ArrayList;
-     *   This is a common native method that loads dialogs from the DB.
-     *   We filter at this layer as a fallback if getDialogs is not native.
-     */
+    /* Hook 2: MessagesStorage.loadDialogs(II) (fallback) */
     JNINativeMethod m2 = {
         "loadDialogs", "(II)Ljava/util/ArrayList;",
         (void*)hk_load_dialogs
     };
     api->hook_jni_native_methods(env,
         "org/telegram/messenger/MessagesStorage", &m2, 1);
+    orig_load_dialogs = m2.fnPtr;
+    if (!orig_load_dialogs) {
+        LOGW("loadDialogs hook not bound");
+    } else {
+        LOGI("Hooked MessagesStorage.loadDialogs(II)");
+    }
 
     /*
-     * Hook 3: View.dispatchTouchEvent — for 5-tap header detection.
+     * Hook 3: 5-tap gesture via PLT hook on View.dispatchTouchEvent.
+     *
+     * dispatchTouchEvent is a Java method, NOT a JNI native method,
+     * so hook_jni_native_methods won't work.  We use plt_hook_register
+     * to intercept the native bridge function in libandroid_runtime.so.
+     *
+     * NOTE: The PLT hook receives the C-level JNI function, whose
+     * signature differs from the Java method signature.  The actual
+     * C function 'android_view_View_dispatchTouchEvent' has native
+     * args, so hk_dispatch_touch must be adapted.
+     *
+     * This is a best-effort hook; if the symbol name changes in a
+     * future Android version, tap detection silently fails.
      */
-    JNINativeMethod m3 = {
-        "dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z",
-        (void*)hk_dispatch_touch
-    };
-    api->hook_jni_native_methods(env, "android/view/View", &m3, 1);
-
-    /* PLT hook fallback for touch detection in libandroid_runtime */
     api->plt_hook_register("libandroid_runtime.so",
                            "android_view_View_dispatchTouchEvent",
                            (void*)hk_dispatch_touch, &orig_dispatch_touch);
@@ -474,14 +518,37 @@ static void register_telegram_hooks(struct rezygisk_api *api, JNIEnv *env) {
     LOGI("Telegram hooks registered");
 }
 
+/* ── State ──────────────────────────────────────────────── */
+
+static bool g_hooks_registered = false;
+static struct rezygisk_api *g_api = NULL;
+static JNIEnv *g_jenv = NULL;
+
 /* ── ABI callbacks ──────────────────────────────────────── */
 
 static void my_pre_app_specialize(void *impl, void *args) {
     (void)impl; (void)args;
+    /* Read nice_name/package from args to decide if we should hook.
+     * We store a flag rather than hooking here because class
+     * loading happens after specialization. */
 }
 
 static void my_post_app_specialize(void *impl, const void *args) {
     (void)impl; (void)args;
+
+    if (g_hooks_registered) return;
+    g_hooks_registered = true;
+
+    if (!g_api || !g_jenv) {
+        LOGE("API or JNI env not available in post_app_specialize");
+        return;
+    }
+
+    /* This callback runs after app specialization — Java classes
+     * are available and JNI method registration is complete.
+     * This is the correct time to install hooks. */
+    LOGI("post_app_specialize: registering Telegram hooks");
+    register_telegram_hooks((struct rezygisk_api *)g_api, g_jenv);
 }
 
 /* ── Zygisk module entry ────────────────────────────────── */
@@ -497,16 +564,15 @@ void zygisk_module_entry(struct rezygisk_api *api, void *env) {
     LOGI("Telegram Chat Hider Zygisk module loading");
 
     /* Resolve module directory */
-    /* get_module_dir writes the module path into the provided buffer */
     if (api->get_module_dir(g_module_dir) != 0 || g_module_dir[0] == '\0') {
         strcpy(g_module_dir, "/data/adb/modules/telegram_chat_hider");
     }
     LOGI("Module dir: %s", g_module_dir);
 
-    /* Determine current process name */
     /*
-     * Zygisk loads this library in every process.  We check the process
-     * name via /proc/self/cmdline and abort early if not Telegram.
+     * Determine current process name via /proc/self/cmdline.
+     * Zygisk loads this library in EVERY process — we only want
+     * to install hooks when the process is Telegram.
      */
     char cmdline[256] = {0};
     int fd = open("/proc/self/cmdline", O_RDONLY);
@@ -514,26 +580,26 @@ void zygisk_module_entry(struct rezygisk_api *api, void *env) {
         read(fd, cmdline, sizeof(cmdline) - 1);
         close(fd);
     }
-    /* Strip everything after the first null byte (cmdline separator) */
     char *sep = strchr(cmdline, '\0');
     if (sep) *sep = '\0';
 
     bool is_telegram = (strstr(cmdline, "org.telegram.messenger") != NULL);
     if (!is_telegram) {
-        LOGD("Skipping hooks — process is not Telegram: %s",
-             cmdline[0] ? cmdline : "(zygote)");
+        LOGD("Skipping — not Telegram (cmdline: %s)", cmdline[0] ? cmdline : "(zygote)");
         return;
     }
 
-    LOGI("Process is Telegram (%s) — registering hooks", cmdline);
+    LOGI("Process is Telegram (%s) — preparing hooks", cmdline);
 
-    /* Load config */
+    /* Pre-load config into global state */
     load_config();
 
-    /* Register hooks */
-    register_telegram_hooks(api, jenv);
+    /* Store API pointers for post_app_specialize */
+    g_api = api;
+    g_jenv = jenv;
 
-    /* Set up ABI callbacks */
+    /* Register module ABI callbacks — post_app_specialize will
+     * call register_telegram_hooks() at the right time. */
     g_abi.pre_app_specialize = my_pre_app_specialize;
     g_abi.post_app_specialize = my_post_app_specialize;
 
@@ -541,5 +607,5 @@ void zygisk_module_entry(struct rezygisk_api *api, void *env) {
         LOGE("Failed to register Zygisk module");
     }
 
-    LOGI("Telegram Chat Hider module initialized");
+    LOGI("Telegram Chat Hider module initialized (hooks deferred to post_app_specialize)");
 }

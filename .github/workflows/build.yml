@@ -25,21 +25,21 @@ jobs:
           echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
       - name: Build Zygisk library (arm64-v8a)
-        env:
-          CC: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
         run: |
+          CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
           mkdir -p zygisk/lib/arm64-v8a
-          $CC -shared -fPIC -O2 -Wall \
+          $CC --target=aarch64-linux-android26 \
+            -shared -fPIC -O2 -Wall -Wextra -D_GNU_SOURCE \
             -I zygisk/src \
             -o zygisk/lib/arm64-v8a/libtelegram_hider.so \
             zygisk/src/telegram_hider.c
 
       - name: Build Zygisk library (armeabi-v7a)
-        env:
-          CC: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi26-clang
         run: |
+          CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi26-clang"
           mkdir -p zygisk/lib/armeabi-v7a
-          $CC -shared -fPIC -O2 -Wall -marm \
+          $CC --target=armv7a-linux-androideabi26 \
+            -shared -fPIC -O2 -Wall -Wextra -D_GNU_SOURCE -marm \
             -I zygisk/src \
             -o zygisk/lib/armeabi-v7a/libtelegram_hider.so \
             zygisk/src/telegram_hider.c
@@ -49,32 +49,20 @@ jobs:
           mkdir -p module/zygisk/arm64-v8a module/zygisk/armeabi-v7a
           cp zygisk/lib/arm64-v8a/libtelegram_hider.so module/zygisk/arm64-v8a/
           cp zygisk/lib/armeabi-v7a/libtelegram_hider.so module/zygisk/armeabi-v7a/
+          chmod 0755 module/zygisk/arm64-v8a/libtelegram_hider.so
+          chmod 0755 module/zygisk/armeabi-v7a/libtelegram_hider.so
 
-      - name: Package ZIP
+      - name: Package ZIP (files at root, not under module/)
         run: |
           VERSION=$(grep '^versionCode=' module/module.prop | cut -d= -f2)
           NAME=$(grep '^id=' module/module.prop | cut -d= -f2)
           rm -f "/tmp/${NAME}-v${VERSION}.zip"
-          (cd module/.. && zip -r "/tmp/${NAME}-v${VERSION}.zip" module/)
+          (cd module/ && zip -r "/tmp/${NAME}-v${VERSION}.zip" .)
           ls -la /tmp/${NAME}-v${VERSION}.zip
 
       - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
+          files: /tmp/telegram_chat_hider-v*.zip
           tag_name: ${{ github.ref_name }}
-          release_name: ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: /tmp/telegram_chat_hider-v1.zip
-          asset_name: telegram_chat_hider.zip
-          asset_content_type: application/zip
+          name: ${{ github.ref_name }}
