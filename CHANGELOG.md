@@ -5,6 +5,28 @@ All notable changes to this project are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.3.1] — 2026-09-23
+
+### Fixed (post-flaw-analysis)
+
+- **5-tap gesture (F-01)**: replaced broken `GetStaticMethodID("getActionMasked","(I)I")` call with
+  correct instance-method `getActionMasked()I`; replaced `mY` field read with `getRawY()` (screen-relative);
+  added `getDownTime()` deduplication so a single physical tap dispatched to N Views in the hierarchy
+  increments the counter only once. All MotionEvent JNI IDs cached once at registration.
+- **Config permissions (F-03)**: `service.sh` and `boot-completed.sh` now set `chmod 0600` (not `0644`)
+  on `chat_hider.json`.
+- **SO_PEERCRED (F-04)**: socket server now rejects clients if `getsockopt(SO_PEERCRED)` fails — previously
+  a failure silently allowed the connection through.
+- **JNI ID caching (F-08)**: `FindClass`/`GetMethodID`/`GetFieldID` calls moved out of hot paths
+  (`filter_dialogs_list`, `hk_dispatch_touch`) into a one-time `cache_jni_ids()`.
+- **String dialog IDs (F-05/F-18)**: native code serializes catalog IDs as JSON strings via
+  `cJSON_AddStringToObject` + `snprintf`; config loader accepts both string and numeric formats
+  (strings preferred for int64 > 2^53 precision).
+- **WebUI saveConfig**: replaced broken heredoc (literal `\\n` never produced real newlines) with
+  `printf '%s'` + single-quote escaping.
+- **WebUI rendering**: `escapeHtml()` now coerces non-strings via `String()`; all ID references
+  normalized to `String()` to prevent `TypeError` on `.replace()`/`.toLowerCase()`.
+
 ## [v1.3.0] — 2026-09-23
 
 ### Summary
@@ -96,7 +118,8 @@ for the original findings this release addresses.
 
 ---
 
-[Unreleased]: https://github.com/cepeter/telegram-apatch-chat-hider/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/cepeter/telegram-apatch-chat-hider/compare/v1.3.1...HEAD
+[v1.3.1]: https://github.com/cepeter/telegram-apatch-chat-hider/releases/tag/v1.3.1
 [v1.3.0]: https://github.com/cepeter/telegram-apatch-chat-hider/releases/tag/v1.3.0
 [v1.2.0]: https://github.com/cepeter/telegram-apatch-chat-hider/releases/tag/v1.2.0
 [v1.1.0]: https://github.com/cepeter/telegram-apatch-chat-hider/releases/tag/v1.1.0
