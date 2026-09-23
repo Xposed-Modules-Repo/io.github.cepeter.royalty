@@ -47,7 +47,7 @@ mkdir -p "$ZIGISK_DIR/lib/arm64-v8a"
     -Wl,-z,relro,-z,now,-z,noexecstack \
     -I "$ZIGISK_DIR/src" \
     -o "$ZIGISK_DIR/lib/arm64-v8a/libtelegram_hider.so" \
-    "$ZIGISK_DIR/src/telegram_hider.c"
+    "$ZIGISK_DIR/src/telegram_hider.c" "$ZIGISK_DIR/src/cJSON.c"
 
 # --- Build for armeabi-v7a --------------------------------------------------
 echo "Building armeabi-v7a..."
@@ -59,7 +59,7 @@ mkdir -p "$ZIGISK_DIR/lib/armeabi-v7a"
     -Wl,-z,relro,-z,now,-z,noexecstack \
     -I "$ZIGISK_DIR/src" \
     -o "$ZIGISK_DIR/lib/armeabi-v7a/libtelegram_hider.so" \
-    "$ZIGISK_DIR/src/telegram_hider.c"
+    "$ZIGISK_DIR/src/telegram_hider.c" "$ZIGISK_DIR/src/cJSON.c"
 
 # --- Copy .so files into module/zygisk/ ------------------------------------
 echo "Assembling module..."

@@ -31,10 +31,12 @@ if [ ! -f "$MODDIR/chat_hider.json" ]; then
 fi
 
 # --- Set permissions ---
-# Config files: private (root only) to avoid leaking which chats are hidden
+# Config file: private (root only) — 0600 so no other process can
+# read which chats are hidden or harvest the dialog catalog.
 chmod 0755 "$MODDIR"
 chmod 0600 "$MODDIR/chat_hider.json"
-chmod 0644 "$MODDIR/dialogs.json" 2>/dev/null || true
+# Remove stale dialogs.json if it exists (we now use a Unix socket)
+rm -f "$MODDIR/dialogs.json" 2>/dev/null || true
 
 chmod 0755 "$MODDIR/zygisk"
 chmod 0755 "$MODDIR/zygisk/arm64-v8a" 2>/dev/null || true

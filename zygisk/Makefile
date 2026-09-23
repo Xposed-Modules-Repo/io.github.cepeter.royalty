@@ -18,17 +18,17 @@ CC_ARM64       := $(TOOLCHAIN)/bin/$(TRIPLE_ARM64)-clang
 CC_ARM         := $(TOOLCHAIN)/bin/$(TRIPLE_ARM)-clang
 
 # ── Flags ─────────────────────────────────────────────────── #
-CFLAGS  := -std=c11 -Wall -Wextra -O2 -fPIC
-# Include local stubs for logging.h / module.h / misc.h (MeowZygisk loader API)
-CFLAGS  += -I$(CURDIR)/src
+CFLAGS  := -std=c11 -Wall -Wextra -O2 -fPIC -I$(CURDIR)/src
 CFLAGS  += -I$(NDK)/sources/android/native_app_glue
 CFLAGS  += -DREZYGISK_API_VERSION=5
 CFLAGS  += -D_GNU_SOURCE
+CFLAGS  += -include stdbool.h
+CFLAGS  += -pthread
 
-LDFLAGS := -shared -Wl,--strip-all
+LDFLAGS := -shared -Wl,--strip-all -pthread
 
 # ── Source / output ───────────────────────────────────────── #
-SRC      := src/telegram_hider.c
+SRC      := src/telegram_hider.c src/cJSON.c
 OUT_ARM64 := ../zygisk/lib/arm64-v8a/libtelegram_hider.so
 OUT_ARM   := ../zygisk/lib/armeabi-v7a/libtelegram_hider.so
 

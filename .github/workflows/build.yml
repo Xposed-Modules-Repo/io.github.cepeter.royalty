@@ -32,7 +32,7 @@ jobs:
             -shared -fPIC -O2 -Wall -Wextra -D_GNU_SOURCE \
             -I zygisk/src \
             -o zygisk/lib/arm64-v8a/libtelegram_hider.so \
-            zygisk/src/telegram_hider.c
+            zygisk/src/telegram_hider.c zygisk/src/cJSON.c
 
       - name: Build Zygisk library (armeabi-v7a)
         run: |
@@ -42,7 +42,7 @@ jobs:
             -shared -fPIC -O2 -Wall -Wextra -D_GNU_SOURCE -marm \
             -I zygisk/src \
             -o zygisk/lib/armeabi-v7a/libtelegram_hider.so \
-            zygisk/src/telegram_hider.c
+            zygisk/src/telegram_hider.c zygisk/src/cJSON.c
 
       - name: Assemble module
         run: |

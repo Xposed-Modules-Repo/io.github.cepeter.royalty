@@ -2,12 +2,13 @@
  * Telegram Chat Hider — WebUI JavaScript
  *
  * Communicates with the host via window.android.exec() (APatch root bridge).
- * Reads/writes JSON config files in the module directory.
+ * Dialog catalog is fetched via Unix domain socket (no plaintext file on disk).
+ * Config is read/written with 0600 permissions.
  */
 
 const MOD_DIR = "/data/adb/modules/telegram_chat_hider";
 const CONFIG_FILE = MOD_DIR + "/chat_hider.json";
-const DIALOGS_FILE = MOD_DIR + "/dialogs.json";
+const SOCK_FILE = MOD_DIR + "/chat_hider.sock";
 
 /* ── Root command execution ────────────────────────────── */
 
@@ -29,9 +30,9 @@ function exec(cmd, callback) {
 const DEFAULT_CONFIG = {
     selected_dialogs: [],
     hide_in_list: true,
-    hide_in_search: true,
-    hide_in_share: true,
-    hide_in_notifications: true
+    hide_in_search: false,
+    hide_in_share: false,
+    hide_in_notifications: false
 };
 
 function loadConfig(callback) {
@@ -52,32 +53,62 @@ function loadConfig(callback) {
 
 function saveConfig(cfg, callback) {
     const json = JSON.stringify(cfg, null, 2);
-    // Write via a heredoc-like approach
-    const cmd = "cat > '" + CONFIG_FILE + "' <<'HEREDOC_END'\n" +
-                json + "\nHEREDOC_END\n" +
-                "chmod 0644 '" + CONFIG_FILE + "'";
+    // Write config with 0600 (owner-only) permissions — not 0644
+    // Use a heredoc to handle special characters in chat IDs safely
+    const cmd = "cat > '" + CONFIG_FILE + "' <<'HEREDOC_END'\\n" +
+                json + "\\nHEREDOC_END\\n" +
+                "chmod 0600 '" + CONFIG_FILE + "'";
     exec(cmd, function(code, stdout, stderr) {
         callback(code === 0 || code === "0");
     });
 }
 
-/* ── Dialog catalog ────────────────────────────────────── */
+/* ── Dialog catalog via Unix domain socket ─────────────── */
 
+/*
+ * Instead of reading a plaintext dialogs.json file from disk, we connect
+ * to a Unix domain socket created by the native Zygisk module inside
+ * Telegram's process.  The socket verifies peer credentials (SO_PEERCRED)
+ * — only root can connect — and the native side sends a length-prefixed
+ * JSON catalog.
+ *
+ * This fixes SEC-03 (plaintext catalog leakage on disk).
+ * If Telegram is not running, the socket won't exist and we show a hint.
+ */
 function loadDialogs(callback) {
-    const cmd = "cat '" + DIALOGS_FILE + "' 2>/dev/null || echo '[]'";
+    // Try connecting to the Unix socket first
+    // Format: echo 'GET_DIALOGS' | nc -U <socket>
+    // The server sends: <8-digit-hex-length>\n<json-data>\n
+    const cmd =
+        "if [ -S '" + SOCK_FILE + "' ]; then " +
+        "  printf 'GET_DIALOGS' | nc -U '" + SOCK_FILE + "' 2>/dev/null " +
+        "  | head -c 1048576" +
+        "; else echo 'SOCKET_OFFLINE'; fi";
+
     exec(cmd, function(code, stdout, stderr) {
         let dialogs = [];
+        const raw = stdout.trim();
+
+        if (raw === 'SOCKET_OFFLINE') {
+            // Socket doesn't exist — Telegram not running
+            callback([], true);  // second arg = offline
+            return;
+        }
+
         try {
-            const raw = stdout.trim();
-            if (raw) {
-                const parsed = JSON.parse(raw);
+            // Response format: <8-hex-digits>\n<json>\n
+            // But nc may merge them; parse what we get
+            const jsonStart = raw.indexOf('[');
+            if (jsonStart >= 0) {
+                const jsonStr = raw.substring(jsonStart);
+                const parsed = JSON.parse(jsonStr);
                 if (Array.isArray(parsed)) dialogs = parsed;
                 else if (parsed.dialogs) dialogs = parsed.dialogs;
             }
         } catch(e) {
             dialogs = [];
         }
-        callback(dialogs);
+        callback(dialogs, false);
     });
 }
 
@@ -105,11 +136,19 @@ function checkStatus() {
             setStatus("status-telegram", ok ? "ok" : "error", ok ? "Installed" : "Not found");
         });
 
-    // Check module
+    // Check module + socket
     exec("ls " + MOD_DIR + "/zygisk 2>/dev/null && echo found || echo missing",
         function(code, stdout) {
             const ok = stdout.trim().includes("found");
             setStatus("status-module", ok ? "ok" : "error", ok ? "Active" : "Not installed");
+        });
+
+    // Check if socket/server is online (Telegram running)
+    exec("ls -S '" + SOCK_FILE + "' 2>/dev/null && echo online || echo offline",
+        function(code, stdout) {
+            const online = stdout.trim().includes("online");
+            setStatus("status-module", online ? "ok" : "error",
+                online ? "Active (Telegram running)" : "Not running");
         });
 }
 
@@ -132,7 +171,9 @@ function renderChats() {
     if (!container) return;
 
     if (filteredDialogs.length === 0 && !window._chatsLoaded) {
-        container.innerHTML = '<div class="loading">No chats found. Make sure Telegram is installed and you\'ve opened it at least once.</div>';
+        container.innerHTML =
+            '<div class="loading">No chats found. Make sure Telegram is installed and you\'ve ' +
+            'opened it at least once so the module can export the dialog catalog.</div>';
         return;
     }
 
@@ -192,7 +233,7 @@ function saveConfiguration() {
 
     saveConfig(cfg, function(ok) {
         if (ok) {
-            alert("Configuration saved! The changes will take effect after restarting Telegram.");
+            alert("Configuration saved! Restart Telegram for changes to take effect.");
         } else {
             alert("Failed to save configuration. Check log for details.");
         }
@@ -207,14 +248,6 @@ document.addEventListener("DOMContentLoaded", function() {
     document.getElementById("btn-save").addEventListener("click", saveConfiguration);
     document.getElementById("chat-search").addEventListener("input", filterChats);
 
-    // Toggle event listeners
-    ["toggle-list", "toggle-search", "toggle-share", "toggle-notifications"].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.addEventListener("change", function() {
-            // Auto-save surface toggles
-        });
-    });
-
     // Load everything
     loadConfig(function(cfg) {
         document.getElementById("toggle-list").checked = cfg.hide_in_list;
@@ -224,10 +257,16 @@ document.addEventListener("DOMContentLoaded", function() {
         selectedIds = new Set(cfg.selected_dialogs);
     });
 
-    loadDialogs(function(dialogs) {
-        allDialogs = dialogs;
-        filteredDialogs = dialogs;
-        renderChats();
+    loadDialogs(function(dialogs, offline) {
+        if (offline) {
+            window._chatsLoaded = false;
+            document.getElementById("chat-list").innerHTML =
+                '<div class="loading">Telegram not running. Open Telegram once, then refresh.</div>';
+        } else {
+            allDialogs = dialogs;
+            filteredDialogs = dialogs;
+            renderChats();
+        }
     });
 
     checkStatus();
