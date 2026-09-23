@@ -86,6 +86,7 @@ struct JNINativeInterface {
     jint (*GetStaticIntField)(void *env, jclass clazz, jfieldID fieldID);
     jmethodID (*GetStaticMethodID)(void *env, jclass clazz, const char *name, const char *sig);
     jint (*CallStaticIntMethod)(void *env, jclass clazz, jmethodID methodID, ...);
+    jobject (*CallStaticObjectMethod)(void *env, jclass clazz, jmethodID methodID, ...);
     jint (*GetJavaVM)(void *env, JavaVM **vm);
     jmethodID (*GetMethodID)(void *env, jclass clazz, const char *name, const char *sig);
     jobject (*NewObject)(void *env, jclass clazz, jmethodID methodID, ...);

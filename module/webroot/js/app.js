@@ -56,12 +56,17 @@ function loadConfig(callback) {
 
 function saveConfig(cfg, callback) {
     const json = JSON.stringify(cfg, null, 2);
-    /* Write config with 0600 (owner-only) permissions.
-     * Use printf to avoid heredoc/newline escaping issues. */
     const jsonEscaped = String(json).replace(/'/g, "'\\''");
-    const cmd = "printf '%s' '" + jsonEscaped + "' > '" + CONFIG_FILE + "' && chmod 0600 '" + CONFIG_FILE + "'";
+    const cmd =
+        "umask 077; tmp='" + CONFIG_FILE + ".tmp.'$$; " +
+        "trap 'rm -f \"$tmp\"' EXIT HUP INT TERM; " +
+        "if printf '%s' '" + jsonEscaped + "' > \"$tmp\"" +
+        " && chmod 0600 \"$tmp\" && chown 0:0 \"$tmp\"" +
+        " && mv -f \"$tmp\" '" + CONFIG_FILE + "';" +
+        " then cat '" + CONFIG_FILE + "'; else exit 1; fi";
     exec(cmd, function(code, stdout, stderr) {
-        callback(code === 0 || code === "0");
+        const exitedCleanly = code === 0 || code === "0";
+        callback(exitedCleanly && stdout === json, stderr);
     });
 }
 
@@ -75,13 +80,11 @@ function saveConfig(cfg, callback) {
  * If Telegram is not running, the socket doesn't exist and we show a hint.
  */
 function loadDialogs(callback) {
-    // Try connecting to the Unix socket first
-    // Format: echo 'GET_DIALOGS' | nc -U <socket>
-    // The server sends: <8-digit-hex-length>\n<json-data>\n
+    // The authenticated socket sends JSON immediately after connect.
     const cmd =
         "if [ -S '" + SOCK_FILE + "' ]; then " +
         "  nc -U '" + SOCK_FILE + "' </dev/null 2>/dev/null " +
-        "  | head -c 1048576" +
+        "  | head -c 51200" +
         "; else echo 'SOCKET_OFFLINE'; fi";
 
     exec(cmd, function(code, stdout, stderr) {

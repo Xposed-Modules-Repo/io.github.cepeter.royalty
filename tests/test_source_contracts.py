@@ -37,5 +37,29 @@ class LifecycleContractTests(unittest.TestCase):
         self.assertIn("int (*get_module_dir)(void *);", MODULE_HEADER)
 
 
+class SocketAndWebUIContractTests(unittest.TestCase):
+    def setUp(self):
+        self.webui = (ROOT / "module/webroot/js/app.js").read_text()
+
+    def test_socket_is_bounded_and_sends_immediately(self):
+        self.assertIn("listen(srv, 8)", SOURCE)
+        self.assertIn("SO_RCVTIMEO", SOURCE)
+        self.assertIn("SO_SNDTIMEO", SOURCE)
+        self.assertIn("CATALOG_MAX", SOURCE)
+        self.assertIn("tch_send_all", SOURCE)
+        server = SOURCE[SOURCE.index("socket_server_thread"):SOURCE.index("start_socket_server")]
+        self.assertNotIn("read(client", server)
+
+    def test_webui_caps_catalog_at_50_kib(self):
+        self.assertIn("head -c 51200", self.webui)
+        self.assertNotIn("head -c 1048576", self.webui)
+
+    def test_webui_saves_atomically_and_verifies_readback(self):
+        self.assertIn("umask 077", self.webui)
+        self.assertIn(".tmp.'$$", self.webui)
+        self.assertIn("mv -f", self.webui)
+        self.assertIn("stdout === json", self.webui)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -31,6 +31,7 @@
 #include <linux/limits.h>
 #include <errno.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <pthread.h>
 
@@ -45,6 +46,7 @@
 /* ── Constants ─────────────────────────── */
 #define SOCK_PATH "/data/adb/modules/telegram_chat_hider/chat_hider.sock"
 #define CONFIG_MAX 8192
+#define CATALOG_MAX (50 * 1024)
 #define MAX_HIDDEN 512
 #define TAP_WINDOW_MS 800
 
@@ -93,6 +95,7 @@ static jfieldID g_Dialog_id = NULL;
 
 /* MotionEvent.ACTION_DOWN static int (resolved at registration) */
 static jint g_ActionDown = 0;
+static float g_header_threshold_px = 220.0f;
 
 /* ── Config loader (cJSON) ────────────── */
 
@@ -226,7 +229,7 @@ static void filter_dialogs_list(JNIEnv *env, jobject list, const char *surface) 
     }
 
     /* Filter if needed */
-    if (g_cfg.revealed || !should_hide_surface(surface)) {
+    if (!should_hide_surface(surface)) {
         return;
     }
 
@@ -258,13 +261,26 @@ static void *socket_server_thread(void *arg) {
     if (bind(srv, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         LOGE("bind: %s", strerror(errno)); close(srv); return NULL;
     }
-    chmod(SOCK_PATH, 0600);
-    if (listen(srv, 5) < 0) { LOGE("listen: %s", strerror(errno)); close(srv); return NULL; }
+    if (chmod(SOCK_PATH, 0600) != 0) {
+        LOGE("chmod socket: %s", strerror(errno));
+        close(srv);
+        unlink(SOCK_PATH);
+        return NULL;
+    }
+    if (listen(srv, 8) < 0) { LOGE("listen: %s", strerror(errno)); close(srv); return NULL; }
     LOGI("Socket server on %s", SOCK_PATH);
 
     for (;;) {
         int client = accept(srv, NULL, NULL);
         if (client < 0) { LOGW("accept: %s", strerror(errno)); sleep(1); continue; }
+
+        struct timeval timeout = { .tv_sec = 5, .tv_usec = 0 };
+        if (setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0 ||
+            setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) != 0) {
+            LOGW("socket timeout setup failed — rejecting client");
+            close(client);
+            continue;
+        }
 
         struct ucred cred;
         socklen_t cl = sizeof(cred);
@@ -276,19 +292,29 @@ static void *socket_server_thread(void *arg) {
             LOGW("Reject uid=%d (non-root)", cred.uid); close(client); continue;
         }
 
-        char req[32] = {0};
-        ssize_t rn = read(client, req, sizeof(req) - 1);
-        if (rn > 0) {
-            req[rn] = '\0';
-            for (ssize_t i = rn - 1; i >= 0 && (req[i]=='\n'||req[i]=='\r'||req[i]==' '); i--)
-                req[i] = '\0';
-
-            pthread_mutex_lock(&g_cat_mtx);
-            const char *data = g_dialog_cache ? g_dialog_cache : "[]";
-            pthread_mutex_unlock(&g_cat_mtx);
-            write(client, data, strlen(data));
-            write(client, "\n", 1);
+        pthread_mutex_lock(&g_cat_mtx);
+        const char *catalog = g_dialog_cache ? g_dialog_cache : "[]";
+        size_t catalog_length = strnlen(catalog, CATALOG_MAX + 1);
+        if (catalog_length > CATALOG_MAX) {
+            catalog = "[]";
+            catalog_length = 2;
         }
+
+        char *payload = malloc(catalog_length + 2);
+        if (payload) {
+            memcpy(payload, catalog, catalog_length);
+            payload[catalog_length] = '\n';
+            payload[catalog_length + 1] = '\0';
+        }
+        pthread_mutex_unlock(&g_cat_mtx);
+
+        if (!payload) {
+            errno = ENOMEM;
+            LOGW("catalog send failed: %s", strerror(errno));
+        } else if (tch_send_all(client, payload, catalog_length + 1) != 0) {
+            LOGW("catalog send failed: %s", strerror(errno));
+        }
+        free(payload);
         close(client);
     }
     close(srv);
@@ -401,8 +427,8 @@ static jboolean hk_dispatch_touch(jobject thiz, jobject event) {
         if (!(*env)->ExceptionCheck(env)) {
             if (masked == g_ActionDown) {
                 float y = (*env)->CallFloatMethod(env, event, g_MotionEvent_getRawY);
-                /* Only count taps in the top header area (screen-relative Y) */
-                if (y >= 0.0f && y < 220.0f) {
+                /* Scale with density and cap at 18% of screen height. */
+                if (y >= 0.0f && y < g_header_threshold_px) {
                     /* Use downTime to deduplicate — a single ACTION_DOWN can
                        be dispatched to multiple Views in the hierarchy. */
                     jlong down_time = (*env)->CallLongMethod(env, event, g_MotionEvent_getDownTime);
@@ -452,8 +478,57 @@ static void resolve_nc_constants(JNIEnv *env) {
 
 /* ── Cache JNI IDs for hot-path hooks ────────── */
 
+static void clear_jni_exception(JNIEnv *env) {
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+}
+
+static void cache_header_threshold(JNIEnv *env) {
+    jclass resources_class = (*env)->FindClass(env, "android/content/res/Resources");
+    if (!resources_class) {
+        clear_jni_exception(env);
+        return;
+    }
+
+    jmethodID get_system = (*env)->GetStaticMethodID(
+        env, resources_class, "getSystem", "()Landroid/content/res/Resources;");
+    jmethodID get_metrics = (*env)->GetMethodID(
+        env, resources_class, "getDisplayMetrics", "()Landroid/util/DisplayMetrics;");
+    if (!get_system || !get_metrics) {
+        clear_jni_exception(env);
+        (*env)->DeleteLocalRef(env, resources_class);
+        return;
+    }
+
+    jobject resources = (*env)->CallStaticObjectMethod(env, resources_class, get_system);
+    jobject metrics = resources ? (*env)->CallObjectMethod(env, resources, get_metrics) : NULL;
+    if (metrics) {
+        jclass metrics_class = (*env)->GetObjectClass(env, metrics);
+        jfieldID height_field = metrics_class
+            ? (*env)->GetFieldID(env, metrics_class, "heightPixels", "I") : NULL;
+        jfieldID density_field = metrics_class
+            ? (*env)->GetFieldID(env, metrics_class, "density", "F") : NULL;
+        if (height_field && density_field) {
+            jint height = (*env)->GetIntField(env, metrics, height_field);
+            jfloat density = (*env)->GetFloatField(env, metrics, density_field);
+            g_header_threshold_px = tch_header_threshold_px(height, density);
+        } else {
+            clear_jni_exception(env);
+        }
+        if (metrics_class) (*env)->DeleteLocalRef(env, metrics_class);
+        (*env)->DeleteLocalRef(env, metrics);
+    } else {
+        clear_jni_exception(env);
+    }
+    if (resources) (*env)->DeleteLocalRef(env, resources);
+    (*env)->DeleteLocalRef(env, resources_class);
+}
+
 static void cache_jni_ids(JNIEnv *env) {
     jclass c;
+
+    cache_header_threshold(env);
 
     c = (*env)->FindClass(env, "android/view/MotionEvent");
     if (c) {
