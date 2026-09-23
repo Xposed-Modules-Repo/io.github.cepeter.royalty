@@ -4,6 +4,8 @@
 
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <sys/types.h>
 #include <jni.h>
 #include "logging.h"
 
@@ -12,6 +14,27 @@
 enum rezygisk_options {
   FORCE_DENYLIST_UNMOUNT = 0,
   DLCLOSE_MODULE_LIBRARY = 1
+};
+
+struct app_specialize_args_v5 {
+  jint *uid;
+  jint *gid;
+  jintArray *gids;
+  jint *runtime_flags;
+  jobjectArray *rlimits;
+  jint *mount_external;
+  jstring *se_info;
+  jstring *nice_name;
+  jstring *instruction_set;
+  jstring *app_data_dir;
+  jintArray *fds_to_ignore;
+  jboolean *is_child_zygote;
+  jboolean *is_top_app;
+  jobjectArray *pkg_data_info_list;
+  jobjectArray *whitelisted_data_info_list;
+  jboolean *mount_data_dirs;
+  jboolean *mount_storage_dirs;
+  jboolean *mount_sysprop_overrides;
 };
 
 struct rezygisk_abi {
@@ -31,18 +54,18 @@ struct rezygisk_api {
   void (*hook_jni_native_methods)(JNIEnv *, const char *, JNINativeMethod *, int);
   union {
     void (*plt_hook_register)(const char *, const char *, void *, void **);
-    void (*plt_hook_register_v4)(unsigned long, unsigned long, const char *, void *, void **);
+    void (*plt_hook_register_v4)(dev_t, ino_t, const char *, void *, void **);
   };
   union {
     void (*plt_hook_exclude)(const char *, const char *);
     void (*exempt_fd)(int);
   };
 
-  bool (*plt_hook_commit)(void);
-  int (*connect_companion)(void *);
-  void (*set_option)(void *, enum rezygisk_options opt);
-  int (*get_module_dir)(void *);
-  uint32_t (*get_flags)(void *);
+    bool (*plt_hook_commit)(void);
+    int (*connect_companion)(void *);
+    void (*set_option)(void *, enum rezygisk_options opt);
+    int (*get_module_dir)(void *);
+    uint32_t (*get_flags)(void);
 };
 
 struct rezygisk_module {

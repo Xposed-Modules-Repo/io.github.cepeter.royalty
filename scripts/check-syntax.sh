@@ -9,6 +9,9 @@ echo "Host-side syntax check..."
 # Also include art_hook.h which references sys/system_properties.h
 gcc -fsyntax-only -Wall -Wextra -std=c11 -D__LP64__ -DNDEBUG -D_GNU_SOURCE \
     -I"$SCRIPT_DIR/zygisk/stubs" -I"$SCRIPT_DIR/zygisk/src" \
-    "$SCRIPT_DIR/zygisk/src/telegram_hider.c" "$SCRIPT_DIR/zygisk/src/art_hook.c" "$SCRIPT_DIR/zygisk/src/cJSON.c"
+    "$SCRIPT_DIR/zygisk/src/telegram_hider.c" \
+    "$SCRIPT_DIR/zygisk/src/art_hook.c" \
+    "$SCRIPT_DIR/zygisk/src/runtime_utils.c" \
+    "$SCRIPT_DIR/zygisk/src/cJSON.c"
 
 echo "✓ No errors or warnings"

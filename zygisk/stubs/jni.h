@@ -34,6 +34,7 @@ typedef void *jbooleanArray;
 typedef void *jfieldID;
 typedef void *jmethodID;
 
+#define JNI_OK 0
 #define JNI_FALSE 0
 #define JNI_TRUE  1
 #define JNICALL

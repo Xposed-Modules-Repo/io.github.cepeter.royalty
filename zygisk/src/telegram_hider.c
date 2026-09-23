@@ -37,6 +37,7 @@
 #include "cJSON.h"
 #include "art_hook.h"
 #include "module.h"
+#include "runtime_utils.h"
 
 #define LOG_TAG "TelegramChatHider"
 #include "logging.h"
@@ -55,6 +56,7 @@ struct hidden_config {
     bool    hide_in_search;
     bool    hide_in_share;
     bool    hide_in_notifications;
+    bool    experimental_art_hooks;
     int     tap_count;
     int64_t last_tap_ms;
     bool    revealed;
@@ -68,8 +70,8 @@ static pthread_mutex_t g_cat_mtx = PTHREAD_MUTEX_INITIALIZER;
 static char *g_dialog_cache = NULL;       /* in-memory JSON catalog */
 
 static JavaVM *g_jvm = NULL;
+static bool g_is_target_process = false;
 static bool g_hooks_registered = false;
-static pthread_once_t g_jvm_once = PTHREAD_ONCE_INIT;
 
 /* NotificationCenter constant IDs (resolved at runtime via reflection) */
 static int g_nc_did_receive_new_messages = -1;
@@ -127,6 +129,8 @@ static void load_config(void) {
     if (cJSON_IsBool(b)) g_cfg.hide_in_share = cJSON_IsTrue(b);
     b = cJSON_GetObjectItemCaseSensitive(root, "hide_in_notifications");
     if (cJSON_IsBool(b)) g_cfg.hide_in_notifications = cJSON_IsTrue(b);
+    b = cJSON_GetObjectItemCaseSensitive(root, "experimental_art_hooks");
+    if (cJSON_IsBool(b)) g_cfg.experimental_art_hooks = cJSON_IsTrue(b);
 
     cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "selected_dialogs");
     if (cJSON_IsArray(arr)) {
@@ -134,21 +138,31 @@ static void load_config(void) {
         cJSON *item;
         cJSON_ArrayForEach(item, arr) {
             if (idx >= MAX_HIDDEN) break;
-            if (cJSON_IsString(item)) {
-                g_cfg.hidden_ids[idx++] = strtoll(item->valuestring, NULL, 10);
+            int64_t parsed = 0;
+            if (cJSON_IsString(item) && tch_parse_dialog_id(item->valuestring, &parsed)) {
+                g_cfg.hidden_ids[idx++] = parsed;
             } else if (cJSON_IsNumber(item)) {
-                /* Fallback for legacy numeric format — doubles lose precision
-                 * for IDs > 2^53, but we can't do better for that encoding. */
-                g_cfg.hidden_ids[idx++] = (int64_t)item->valuedouble;
+                /* Legacy numeric values are accepted only when exactly representable. */
+                double value = item->valuedouble;
+                if (value >= -9223372036854775808.0 && value < 9223372036854775808.0) {
+                    parsed = (int64_t)value;
+                    if (parsed != 0 && (double)parsed == value) {
+                        g_cfg.hidden_ids[idx++] = parsed;
+                    }
+                }
             }
         }
         g_cfg.hidden_count = idx;
     }
 
+    int hidden_count = g_cfg.hidden_count;
+    bool hide_in_list = g_cfg.hide_in_list;
+    bool hide_in_notifications = g_cfg.hide_in_notifications;
+    bool experimental_art_hooks = g_cfg.experimental_art_hooks;
     pthread_mutex_unlock(&g_cfg_mtx);
     cJSON_Delete(root);
-    LOGI("Config: %d hidden, list=%d notif=%d",
-         g_cfg.hidden_count, g_cfg.hide_in_list, g_cfg.hide_in_notifications);
+    LOGI("Config: %d hidden, list=%d notif=%d experimental_hooks=%d",
+         hidden_count, hide_in_list, hide_in_notifications, experimental_art_hooks);
 }
 
 /* ── JNI env helper (for hook callbacks) ── */
@@ -512,17 +526,49 @@ static void register_telegram_hooks(JNIEnv *env) {
 
 /* ── ABI callbacks ────────────── */
 
-static void my_pre_app_specialize(void *impl, void *args) { (void)impl; (void)args; }
+static void my_pre_app_specialize(void *impl, void *raw_args) {
+    (void)impl;
+    g_is_target_process = false;
 
-static void my_post_app_specialize(void *impl, const void *args) {
-    (void)impl; (void)args;
-    if (g_hooks_registered) return;
-    g_hooks_registered = true;
+    struct app_specialize_args_v5 *args = raw_args;
+    if (!args || !args->nice_name || !*args->nice_name) {
+        return;
+    }
 
     JNIEnv *env = get_env();
-    if (!env) { LOGE("Cannot attach thread for hooks"); return; }
+    if (!env) {
+        return;
+    }
 
-    LOGI("post_app_specialize: registering hooks (ART entry-point replacement)");
+    const char *nice_name = (*env)->GetStringUTFChars(env, *args->nice_name, NULL);
+    if (!nice_name) {
+        return;
+    }
+    g_is_target_process = tch_is_target_process(nice_name);
+    (*env)->ReleaseStringUTFChars(env, *args->nice_name, nice_name);
+}
+
+static void my_post_app_specialize(void *impl, const void *args) {
+    (void)impl;
+    (void)args;
+    if (!g_is_target_process || g_hooks_registered) {
+        return;
+    }
+    g_hooks_registered = true;
+
+    load_config();
+    if (!g_cfg.experimental_art_hooks) {
+        LOGE("Legacy ART hooks are disabled: the direct Quick-ABI bridge is unsafe");
+        return;
+    }
+
+    JNIEnv *env = get_env();
+    if (!env) {
+        LOGE("Cannot attach thread for experimental hooks");
+        return;
+    }
+
+    LOGW("Experimental ART hooks explicitly enabled; crashes and data corruption are possible");
     register_telegram_hooks(env);
     start_socket_server();
 }
@@ -532,40 +578,49 @@ static void my_post_app_specialize(void *impl, const void *args) {
 static struct rezygisk_abi g_abi = {
     .api_version = REZYGISK_API_VERSION,
     .impl = NULL,
+    .pre_app_specialize = my_pre_app_specialize,
+    .post_app_specialize = my_post_app_specialize,
 };
 
-void zygisk_module_entry(struct rezygisk_api *api, void *env) {
-    JNIEnv *jenv = (JNIEnv *)env;
-    LOGI("Telegram Chat Hider loading");
-
-    if (api->get_module_dir(g_module_dir) != 0 || g_module_dir[0] == '\0')
-        strcpy(g_module_dir, "/data/adb/modules/telegram_chat_hider");
-
-    char cmdline[256] = {0};
-    int fd = open("/proc/self/cmdline", O_RDONLY);
-    if (fd >= 0) { read(fd, cmdline, sizeof(cmdline)-1); close(fd); }
-    char *sep = strchr(cmdline, '\0');
-    if (sep) *sep = '\0';
-
-    /* REL-09: exact package match to avoid matching org.telegram.messenger.webdebug or
-     * other suffixes — only hook the main app process. */
-    char *p = strstr(cmdline, "org.telegram.messenger");
-    if (!p || (p > cmdline && *(p - 1) != ' ' && *(p - 1) != '\0')) {
-        LOGD("Skipping (not Telegram main process): %s", cmdline);
+static void resolve_module_dir(struct rezygisk_api *api) {
+    strcpy(g_module_dir, "/data/adb/modules/telegram_chat_hider");
+    if (!api->get_module_dir) {
         return;
     }
 
-    LOGI("Telegram process detected — installing hooks");
-    load_config();
-
-    if (jenv) {
-        (*jenv)->GetJavaVM(jenv, &g_jvm);
+    int dir_fd = api->get_module_dir(api->impl);
+    if (dir_fd < 0) {
+        return;
     }
 
-    g_abi.pre_app_specialize  = my_pre_app_specialize;
-    g_abi.post_app_specialize = my_post_app_specialize;
-    if (!api->register_module(api, &g_abi))
-        LOGE("Failed to register Zygisk module");
+    char fd_path[64];
+    snprintf(fd_path, sizeof(fd_path), "/proc/self/fd/%d", dir_fd);
+    ssize_t length = readlink(fd_path, g_module_dir, sizeof(g_module_dir) - 1);
+    close(dir_fd);
+    if (length <= 0) {
+        strcpy(g_module_dir, "/data/adb/modules/telegram_chat_hider");
+        return;
+    }
+    g_module_dir[length] = '\0';
+}
 
-    LOGI("Module initialized (hooks on post_app_specialize)");
+void zygisk_module_entry(struct rezygisk_api *api, void *env) {
+    JNIEnv *jenv = env;
+    if (!api || !api->register_module || !jenv) {
+        LOGE("Invalid MeowZygisk API or JNI environment");
+        return;
+    }
+
+    if ((*jenv)->GetJavaVM(jenv, &g_jvm) != JNI_OK || !g_jvm) {
+        LOGE("GetJavaVM failed");
+        return;
+    }
+
+    if (!api->register_module(api, &g_abi)) {
+        LOGE("Failed to register MeowZygisk API v%d module", REZYGISK_API_VERSION);
+        return;
+    }
+
+    resolve_module_dir(api);
+    LOGI("Module registered; legacy hooks are disabled by default");
 }
