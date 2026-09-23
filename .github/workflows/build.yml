@@ -24,12 +24,21 @@ jobs:
           echo "ANDROID_NDK_HOME=/tmp/android-ndk-r26d" >> $GITHUB_ENV
           echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
+      - name: Host-side syntax check
+        run: |
+          bash scripts/check-syntax.sh
+
       - name: Build Zygisk library (arm64-v8a)
         run: |
           CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
           mkdir -p zygisk/lib/arm64-v8a
           $CC --target=aarch64-linux-android26 \
-            -shared -fPIC -O2 -Wall -Wextra -D_GNU_SOURCE \
+            -shared -fPIC -O2 -Wall -Wextra \
+            -fstack-protector-strong -D_FORTIFY_SOURCE=2 \
+            -fvisibility=hidden -DREZYGISK_API_VERSION=5 \
+            -include stdbool.h -pthread \
+            -Wl,-z,relro,-z,now,-z,noexecstack \
+            -D_GNU_SOURCE \
             -I zygisk/src \
             -o zygisk/lib/arm64-v8a/libtelegram_hider.so \
             zygisk/src/telegram_hider.c zygisk/src/art_hook.c zygisk/src/cJSON.c
@@ -39,7 +48,12 @@ jobs:
           CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi26-clang"
           mkdir -p zygisk/lib/armeabi-v7a
           $CC --target=armv7a-linux-androideabi26 \
-            -shared -fPIC -O2 -Wall -Wextra -D_GNU_SOURCE -marm \
+            -shared -fPIC -O2 -Wall -Wextra -marm \
+            -fstack-protector-strong -D_FORTIFY_SOURCE=2 \
+            -fvisibility=hidden -DREZYGISK_API_VERSION=5 \
+            -include stdbool.h -pthread \
+            -Wl,-z,relro,-z,now,-z,noexecstack \
+            -D_GNU_SOURCE \
             -I zygisk/src \
             -o zygisk/lib/armeabi-v7a/libtelegram_hider.so \
             zygisk/src/telegram_hider.c zygisk/src/art_hook.c zygisk/src/cJSON.c
@@ -60,22 +74,10 @@ jobs:
           (cd module/ && zip -r "/tmp/${NAME}-v${VERSION}.zip" .)
           ls -la /tmp/${NAME}-v${VERSION}.zip
 
-      - name: Delete previous releases (keep latest only)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "Removing all previous GitHub releases for this repo…"
-          gh release list --limit 100 --json tagName \
-            | jq -r '.[].tagName' \
-            | while read -r tag; do
-                echo "  Deleting release for tag: $tag"
-                gh release delete "$tag" --yes
-              done
-          echo "Previous releases cleaned."
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: /tmp/telegram_chat_hider-v*.zip
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
+          generate_release_notes: true

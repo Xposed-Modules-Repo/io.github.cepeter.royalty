@@ -80,7 +80,7 @@ function loadDialogs(callback) {
     // The server sends: <8-digit-hex-length>\n<json-data>\n
     const cmd =
         "if [ -S '" + SOCK_FILE + "' ]; then " +
-        "  printf 'GET_DIALOGS' | nc -U '" + SOCK_FILE + "' 2>/dev/null " +
+        "  nc -U '" + SOCK_FILE + "' </dev/null 2>/dev/null " +
         "  | head -c 1048576" +
         "; else echo 'SOCKET_OFFLINE'; fi";
 
@@ -114,10 +114,10 @@ function loadDialogs(callback) {
 /* ── Status checks ─────────────────────────────────────── */
 
 function checkStatus() {
-    // Check APatch
-    exec("echo $APATCH 2>/dev/null || getprop ro.kernel.apatch 2>/dev/null || echo none",
+    // Check APatch (reliable: check for /data/adb/apatch directory)
+    exec("ls /data/adb/apatch >/dev/null 2>&1 && echo true || echo none",
         function(code, stdout) {
-            const ok = stdout.trim() === "true" || stdout.trim() !== "none";
+            const ok = stdout.trim() === "true";
             setStatus("status-apatch", ok ? "ok" : "error", ok ? "Running" : "Not detected");
         });
 
@@ -135,18 +135,19 @@ function checkStatus() {
             setStatus("status-telegram", ok ? "ok" : "error", ok ? "Installed" : "Not found");
         });
 
-    // Check module + socket
+    // Check module installed
     exec("ls " + MOD_DIR + "/zygisk 2>/dev/null && echo found || echo missing",
         function(code, stdout) {
             const ok = stdout.trim().includes("found");
-            setStatus("status-module", ok ? "ok" : "error", ok ? "Active" : "Not installed");
+            setStatus("status-module", ok ? "ok" : "error", ok ? "Installed" : "Not installed");
         });
 
-    // Check if socket/server is online (Telegram running)
-    exec("ls -S '" + SOCK_FILE + "' 2>/dev/null && echo online || echo offline",
+    // Check if Telegram is running — probe the socket by actually connecting,
+    // not by testing file existence (stale socket persists after exit).
+    exec("nc -z -U '" + SOCK_FILE + "' 2>/dev/null && echo online || echo offline",
         function(code, stdout) {
             const online = stdout.trim().includes("online");
-            setStatus("status-module", online ? "ok" : "error",
+            setStatus("status-telegram", online ? "ok" : "error",
                 online ? "Active (Telegram running)" : "Not running");
         });
 }

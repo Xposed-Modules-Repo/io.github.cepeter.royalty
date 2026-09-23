@@ -2,7 +2,7 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
-> **v1.3.0** · Hide selected Telegram chats behind a 5-tap header gesture. Runs as a Zygisk module via [MeowZygisk](https://github.com/MeowDump/MeowZygisk) inside [APatch](https://github.com/bmax121/APatch).
+> **v1.3.1** · Hide selected Telegram chats behind a 5-tap header gesture. Runs as a Zygisk module via [MeowZygisk](https://github.com/MeowDump/MeowZygisk) inside [APatch](https://github.com/bmax121/APatch).
 
 [Changelog](CHANGELOG.md)
 

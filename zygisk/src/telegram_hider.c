@@ -547,8 +547,11 @@ void zygisk_module_entry(struct rezygisk_api *api, void *env) {
     char *sep = strchr(cmdline, '\0');
     if (sep) *sep = '\0';
 
-    if (strstr(cmdline, "org.telegram.messenger") == NULL) {
-        LOGD("Skipping (not Telegram)");
+    /* REL-09: exact package match to avoid matching org.telegram.messenger.webdebug or
+     * other suffixes — only hook the main app process. */
+    char *p = strstr(cmdline, "org.telegram.messenger");
+    if (!p || (p > cmdline && *(p - 1) != ' ' && *(p - 1) != '\0')) {
+        LOGD("Skipping (not Telegram main process): %s", cmdline);
         return;
     }
 
