@@ -60,6 +60,19 @@ jobs:
           (cd module/ && zip -r "/tmp/${NAME}-v${VERSION}.zip" .)
           ls -la /tmp/${NAME}-v${VERSION}.zip
 
+      - name: Delete previous releases (keep latest only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Removing all previous GitHub releases for this repo…"
+          gh release list --limit 100 --json tagName,url \
+            | jq -r '.[].tagName' \
+            | while read -r tag; do
+                echo "  Deleting release for tag: $tag"
+                gh release delete "$tag" --yes
+              done
+          echo "Previous releases cleaned."
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
