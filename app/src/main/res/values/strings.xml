@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Telegram Chat Hider</string>
+    <string name="xposed_description">Hide selected Telegram dialogs with Vector or LSPosed.</string>
+</resources>

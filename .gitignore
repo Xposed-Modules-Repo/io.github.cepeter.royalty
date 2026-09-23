@@ -16,6 +16,12 @@ __pycache__/
 *.pyc
 .venv/
 
+# Android / Gradle
+.gradle/
+local.properties
+captures/
+.externalNativeBuild/
+
 # Android NDK build output
 build/
 obj/
