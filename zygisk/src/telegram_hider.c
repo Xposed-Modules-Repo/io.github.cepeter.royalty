@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <limits.h>
+#include <linux/limits.h>
 #include <jni.h>
 
 #define LOG_TAG "TelegramChatHider"
@@ -173,7 +174,6 @@ static void export_dialogs(JNIEnv *env, jobject dialog_list) {
         jlong id = (*env)->GetLongField(env, dialog, fid_id);
 
         /* Get the dialog name from the last message or peer */
-        char name[256] = "Unknown";
         jfieldID fid_last_msg = (*env)->GetFieldID(env, d_cls, "last_message",
                                                    "Lorg/telegram/tgnet/TLRPC$Message;");
         jobject last_msg = fid_last_msg ? (*env)->GetObjectField(env, dialog, fid_last_msg) : NULL;
@@ -185,18 +185,15 @@ static void export_dialogs(JNIEnv *env, jobject dialog_list) {
 
             if (peer) {
                 jclass p_cls = (*env)->GetObjectClass(env, peer);
-                jfieldID fid_user_id = (*env)->GetFieldID(env, p_cls, "user_id", "J");
                 jfieldID fid_chat_id = (*env)->GetFieldID(env, p_cls, "chat_id", "J");
                 jfieldID fid_channel_id = (*env)->GetFieldID(env, p_cls, "channel_id", "J");
 
-                jlong uid = fid_user_id ? (*env)->GetLongField(env, peer, fid_user_id) : 0;
                 jlong cid = fid_chat_id ? (*env)->GetLongField(env, peer, fid_chat_id) : 0;
                 jlong chid = fid_channel_id ? (*env)->GetLongField(env, peer, fid_channel_id) : 0;
 
                 char type[16] = "user";
-                long long entity_id = (long long)uid;
-                if (cid > 0) { strcpy(type, "chat"); entity_id = (long long)cid; }
-                else if (chid > 0) { strcpy(type, "channel"); entity_id = (long long)chid; }
+                if (cid > 0) strcpy(type, "chat");
+                else if (chid > 0) strcpy(type, "channel");
 
                 /* Dialog id in Telegram is constructed from type + entity_id */
                 /* For users: id = user_id; for chats: id = -chat_id; for channels: id = -channel_id */
@@ -396,7 +393,7 @@ static jobject JNICALL hk_get_dialogs(JNIEnv *env, jobject thiz) {
  * 3. The view belongs to the chat list fragment
  */
 
-static jobject JNICALL hk_dispatch_touch(JNIEnv *env, jobject thiz, jobject event) {
+static jboolean JNICALL hk_dispatch_touch(JNIEnv *env, jobject thiz, jobject event) {
     /* Check if this is an ACTION_UP */
     jclass me_cls = (*env)->FindClass(env, "android/view/MotionEvent");
     jmethodID mid_action = (*env)->GetMethodID(env, me_cls, "getAction", "()I");
@@ -416,7 +413,7 @@ static jobject JNICALL hk_dispatch_touch(JNIEnv *env, jobject thiz, jobject even
 
     /* Call original */
     if (orig_dispatch_touch) {
-        return ((jobject (*)(JNIEnv*, jobject, jobject))orig_dispatch_touch)(env, thiz, event);
+        return ((jboolean (*)(JNIEnv*, jobject, jobject))orig_dispatch_touch)(env, thiz, event);
     }
 
     /* Fallback — let the event propagate */
@@ -461,13 +458,6 @@ static void register_telegram_hooks(struct rezygisk_api *api, JNIEnv *env) {
 
     /*
      * Hook 3: View.dispatchTouchEvent — for 5-tap header detection.
-     *
-     * We attempt to hook this as a JNI native method on View.
-     * If it's not a registered JNI method, the hook silently fails
-     * and the 5-tap gesture won't work — but chat hiding remains
-     * functional.
-     *
-     * Fallback: We also try a PLT hook on libandroid_runtime.so.
      */
     JNINativeMethod m3 = {
         "dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z",
@@ -476,8 +466,6 @@ static void register_telegram_hooks(struct rezygisk_api *api, JNIEnv *env) {
     api->hook_jni_native_methods(env, "android/view/View", &m3, 1);
 
     /* PLT hook fallback for touch detection in libandroid_runtime */
-    dev_t android_runtime_dev = 0;  /* will be resolved at runtime */
-    ino_t android_runtime_ino = 0;
     api->plt_hook_register("libandroid_runtime.so",
                            "android_view_View_dispatchTouchEvent",
                            (void*)hk_dispatch_touch, &orig_dispatch_touch);
@@ -509,8 +497,8 @@ void zygisk_module_entry(struct rezygisk_api *api, void *env) {
     LOGI("Telegram Chat Hider Zygisk module loading");
 
     /* Resolve module directory */
-    int rc = api->get_module_dir(api, g_module_dir);
-    if (rc != 0 || g_module_dir[0] == '\0') {
+    /* get_module_dir writes the module path into the provided buffer */
+    if (api->get_module_dir(g_module_dir) != 0 || g_module_dir[0] == '\0') {
         strcpy(g_module_dir, "/data/adb/modules/telegram_chat_hider");
     }
     LOGI("Module dir: %s", g_module_dir);
