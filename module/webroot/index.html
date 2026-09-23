@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Telegram Chat Hider</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Telegram Chat Hider</h1>
+    <p class="subtitle">Hide chats • Reveal with 5 taps on header</p>
+  </header>
+
+  <section id="status-section">
+    <h2>Status</h2>
+    <div class="status-grid">
+      <div class="status-item">
+        <span class="label">APatch</span>
+        <span id="status-apatch" class="status unknown">…</span>
+      </div>
+      <div class="status-item">
+        <span class="label">MeowZygisk</span>
+        <span id="status-meowzygisk" class="status unknown">…</span>
+      </div>
+      <div class="status-item">
+        <span class="label">Telegram</span>
+        <span id="status-telegram" class="status unknown">…</span>
+      </div>
+      <div class="status-item">
+        <span class="label">Module</span>
+        <span id="status-module" class="status unknown">…</span>
+      </div>
+    </div>
+    <button id="btn-refresh" class="btn btn-secondary">Refresh Status</button>
+  </section>
+
+  <hr>
+
+  <section id="surfaces-section">
+    <h2>Hiding Surfaces</h2>
+    <div class="toggle-list">
+      <label class="toggle">
+        <input type="checkbox" id="toggle-list" checked>
+        <span class="checkmark"></span>
+        Chat list
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="toggle-search" checked>
+        <span class="checkmark"></span>
+        Search
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="toggle-share" checked>
+        <span class="checkmark"></span>
+        Share picker
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="toggle-notifications" checked>
+        <span class="checkmark"></span>
+        Notifications
+      </label>
+    </div>
+  </section>
+
+  <hr>
+
+  <section id="chats-section">
+    <h2>Select Chats to Hide</h2>
+    <div class="search-bar">
+      <input type="text" id="chat-search" placeholder="Filter chats… Type to search">
+    </div>
+    <div class="hint">
+      Tap 5 times on the Telegram header logo to temporarily reveal hidden chats.
+    </div>
+    <div id="chat-list" class="chat-list">
+      <div class="loading">Loading chats…</div>
+    </div>
+    <button id="btn-save" class="btn btn-primary">Save Configuration</button>
+  </section>
+
+  <hr>
+
+  <section id="reveal-section">
+    <h2>Reveal State</h2>
+    <div class="reveal-status">
+      <span id="reveal-state">Hidden (5-tap to reveal)</span>
+    </div>
+  </section>
+
+  <footer>
+    <p>Telegram Chat Hider v1.0.0 · Requires APatch + MeowZygisk</p>
+  </footer>
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

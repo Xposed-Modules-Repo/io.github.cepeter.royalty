@@ -1,0 +1,62 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install NDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip
+          wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip -O /tmp/ndk.zip
+          unzip -q /tmp/ndk.zip -d /tmp
+          echo "ANDROID_NDK_HOME=/tmp/android-ndk-r26d" >> $GITHUB_ENV
+
+      - name: Set up standalone toolchain
+        run: |
+          $ANDROID_NDK_HOME/build/tools/make_standalone_toolchain.py \
+            --arch arm64 --api 26 --install-dir /tmp/aarch64-linux-android
+          $ANDROID_NDK_HOME/build/tools/make_standalone_toolchain.py \
+            --arch arm --api 26 --install-dir /tmp/armv7a-linux-androideabi
+          echo "PATH=$PATH:/tmp/aarch64-linux-android/bin:/tmp/armv7a-linux-androideabi/bin" >> $GITHUB_ENV
+
+      - name: Build Zygisk libs
+        run: |
+          cd zygisk
+          # Build arm64
+          aarch64-linux-android-clang \
+            --target=aarch64-linux-android \
+            -shared -fPIC -O2 \
+            -I include \
+            -o lib/arm64-v8a/libtelegram_hider.so \
+            src/telegram_hider.c
+          # Build armeabi-v7a
+          armv7a-linux-androideabi-clang \
+            --target=armv7a-linux-androideabi \
+            -shared -fPIC -O2 \
+            -I include \
+            -o lib/armeabi-v7a/libtelegram_hider.so \
+            src/telegram_hider.c
+
+      - name: Package module
+        run: |
+          mkdir -p module/zygisk/arm64-v8a module/zygisk/armeabi-v7a
+          cp zygisk/lib/arm64-v8a/libtelegram_hider.so module/zygisk/arm64-v8a/
+          cp zygisk/lib/armeabi-v7a/libtelegram_hider.so module/zygisk/armeabi-v7a/
+          VERSION=$(grep versionCode module/module.prop | cut -d= -f2)
+          NAME=$(grep '^id=' module/module.prop | cut -d= -f2)
+          zip -r "module-${NAME}-v${{ github.ref_name }}.zip" module/
+          cp "module-${NAME}-v${{ github.ref_name }}.zip" /tmp/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: /tmp/module-*.zip
