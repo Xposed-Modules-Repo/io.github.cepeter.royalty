@@ -3,6 +3,7 @@
 #define MODULE_H
 
 #include <string.h>
+#include <stdint.h>
 #include <jni.h>
 #include "logging.h"
 
@@ -30,7 +31,7 @@ struct rezygisk_api {
   void (*hook_jni_native_methods)(JNIEnv *, const char *, JNINativeMethod *, int);
   union {
     void (*plt_hook_register)(const char *, const char *, void *, void **);
-    void (*plt_hook_register_v4)(dev_t, ino_t, const char *, void *, void **);
+    void (*plt_hook_register_v4)(unsigned long, unsigned long, const char *, void *, void **);
   };
   union {
     void (*plt_hook_exclude)(const char *, const char *);

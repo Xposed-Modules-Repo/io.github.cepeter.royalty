@@ -28,7 +28,7 @@ CFLAGS  += -pthread
 LDFLAGS := -shared -Wl,--strip-all -pthread
 
 # ── Source / output ───────────────────────────────────────── #
-SRC      := src/telegram_hider.c src/cJSON.c
+SRC      := src/telegram_hider.c src/art_hook.c src/cJSON.c
 OUT_ARM64 := ../zygisk/lib/arm64-v8a/libtelegram_hider.so
 OUT_ARM   := ../zygisk/lib/armeabi-v7a/libtelegram_hider.so
 
@@ -39,11 +39,11 @@ all: $(OUT_ARM64) $(OUT_ARM)
 
 $(OUT_ARM64): $(SRC)
 	mkdir -p $(dir $@)
-	$(CC_ARM64) $(CFLAGS) $< -o $@ $(LDFLAGS)
+	$(CC_ARM64) $(CFLAGS) $(SRC) -o $@ $(LDFLAGS)
 
 $(OUT_ARM): $(SRC)
 	mkdir -p $(dir $@)
-	$(CC_ARM) $(CFLAGS) $< -o $@ $(LDFLAGS)
+	$(CC_ARM) $(CFLAGS) $(SRC) -o $@ $(LDFLAGS)
 
 clean:
 	rm -f $(OUT_ARM64) $(OUT_ARM)

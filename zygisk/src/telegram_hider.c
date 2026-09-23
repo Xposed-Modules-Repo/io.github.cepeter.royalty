@@ -1,22 +1,23 @@
 /*
- * Telegram Chat Hider — Zygisk Library
+ * Telegram Chat Hider — Zygisk Library (v1.3.0)
  *
- * Hooks Telegram's dialog loading to hide selected chats.
- * Exports dialog catalog via Unix domain socket for WebUI.
- * Implements 5-tap header gesture for temporary reveal.
+ * Hooks Telegram's Java methods via ART ArtMethod entry-point replacement
+ * (equivalent to Pine/SandHook approach — works on ALL Java methods, not just
+ * JNI-registered natives that hook_jni_native_methods can intercept).
  *
- * Target: org.telegram.messenger (official Telegram Android)
- * Build:  see Makefile
+ * Hooked methods:
+ *  - MessagesController.getDialogs(I)          → filter hidden dialogs from chat list
+ *  - NotificationCenter.postNotificationName  → suppress notifications for hidden chats
+ *  - View.dispatchTouchEvent(MotionEvent)     → 5-tap header gesture to reveal/hide
  *
- * Security notes:
- *   - Dialog catalog is served over a Unix domain socket (0600 perms),
- *     NOT written to a plaintext file.  SO_PEERCREED verifies the
- *     connecting process is root before serving data.
- *   - Config is read with cJSON (bounds-checked parsing, no hand-rolled
- *     pointer arithmetic).
- *   - All access to g_cfg and g_dialog_cache is guarded by pthread_mutex.
+ * Config: chat_hider.json (0600 perms), parsed with cJSON.
+ * IPC:    Dialog catalog served via Unix domain socket (SO_PEERCREED root-only).
+ * Threads: all shared state mutex-protected.
  */
-
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <jni.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -32,67 +33,61 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <pthread.h>
-#include <jni.h>
+
 #include "cJSON.h"
+#include "art_hook.h"
+#include "module.h"
 
 #define LOG_TAG "TelegramChatHider"
 #include "logging.h"
-#include "module.h"
 
-/* ── Constants ─────────────────────────────────────────── */
+/* ── Constants ─────────────────────────── */
+#define SOCK_PATH "/data/adb/modules/telegram_chat_hider/chat_hider.sock"
+#define CONFIG_MAX 8192
+#define MAX_HIDDEN 512
+#define TAP_WINDOW_MS 800
 
-#define CONFIG_FILE     "chat_hider.json"
-#define SOCKET_FILE     "chat_hider.sock"
-#define SOCK_PATH       "/data/adb/modules/telegram_chat_hider/chat_hider.sock"
-#define CONFIG_MAX      8192
-#define MAX_HIDDEN      512
-#define MAX_DIALOG_LEN  32   /* dialog IDs fit in 64-bit long: max 20 digits */
-#define TAP_THRESHOLD   5
-#define TAP_WINDOW_MS   800
-
-/* ── Config ─────────────────────────────────────────────── */
-
+/* ── Config state (mutex-protected) ───── */
 struct hidden_config {
-    char  dialog_ids[MAX_HIDDEN][MAX_DIALOG_LEN];
-    int   dialog_count;
-    bool  hide_in_list;
-    bool  hide_in_search;
-    bool  hide_in_share;
-    bool  hide_in_notifications;
-    /* Transient runtime state (not persisted) */
-    int   tap_count;
-    long  last_tap_ms;
-    bool  revealed;
+    int64_t hidden_ids[MAX_HIDDEN];
+    int     hidden_count;
+    bool    hide_in_list;
+    bool    hide_in_search;
+    bool    hide_in_share;
+    bool    hide_in_notifications;
+    int     tap_count;
+    int64_t last_tap_ms;
+    bool    revealed;
 };
 
 static struct hidden_config g_cfg;
 static char g_module_dir[PATH_MAX];
-static char *g_dialog_cache = NULL;   /* in-memory JSON catalog */
-static pthread_mutex_t g_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t g_cfg_mutex   = PTHREAD_MUTEX_INITIALIZER;
-static int g_socket_fd = -1;
+static pthread_mutex_t g_cfg_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_cat_mtx = PTHREAD_MUTEX_INITIALIZER;
+static char *g_dialog_cache = NULL;       /* in-memory JSON catalog */
 
-/* ── cJSON-based config parsing ─────────────────────────── */
+static JavaVM *g_jvm = NULL;
+static bool g_hooks_registered = false;
+static pthread_once_t g_jvm_once = PTHREAD_ONCE_INIT;
+
+/* NotificationCenter constant IDs (resolved at runtime via reflection) */
+static int g_nc_did_receive_new_messages = -1;
+static int g_nc_push_messages_updated = -1;
+
+/* ── Config loader (cJSON) ────────────── */
 
 static void load_config(void) {
-    pthread_mutex_lock(&g_cfg_mutex);
+    pthread_mutex_lock(&g_cfg_mtx);
     memset(&g_cfg, 0, sizeof(g_cfg));
-    /* Sensible defaults: hide in list only by default */
     g_cfg.hide_in_list = true;
-    g_cfg.hide_in_search = false;
-    g_cfg.hide_in_share = false;
-    g_cfg.hide_in_notifications = false;
-    pthread_mutex_unlock(&g_cfg_mutex);
+    pthread_mutex_unlock(&g_cfg_mtx);
 
     char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/" CONFIG_FILE,
+    snprintf(path, sizeof(path), "%s/chat_hider.json",
              g_module_dir[0] ? g_module_dir : "/data/adb/modules/telegram_chat_hider");
 
     int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        LOGW("Config not found at %s — using defaults", path);
-        return;
-    }
+    if (fd < 0) { LOGW("No config at %s — using defaults", path); return; }
 
     char buf[CONFIG_MAX + 1];
     ssize_t n = read(fd, buf, CONFIG_MAX);
@@ -100,14 +95,10 @@ static void load_config(void) {
     if (n <= 0) return;
     buf[n] = '\0';
 
-    /* Use cJSON for robust, bounds-checked JSON parsing */
     cJSON *root = cJSON_Parse(buf);
-    if (!root) {
-        LOGE("Failed to parse config JSON");
-        return;
-    }
+    if (!root) { LOGW("Config JSON parse error — using defaults"); return; }
 
-    pthread_mutex_lock(&g_cfg_mutex);
+    pthread_mutex_lock(&g_cfg_mtx);
 
     cJSON *b;
     b = cJSON_GetObjectItemCaseSensitive(root, "hide_in_list");
@@ -119,230 +110,162 @@ static void load_config(void) {
     b = cJSON_GetObjectItemCaseSensitive(root, "hide_in_notifications");
     if (cJSON_IsBool(b)) g_cfg.hide_in_notifications = cJSON_IsTrue(b);
 
-    /* Parse selected_dialogs array */
     cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "selected_dialogs");
     if (cJSON_IsArray(arr)) {
         int idx = 0;
         cJSON *item;
         cJSON_ArrayForEach(item, arr) {
             if (idx >= MAX_HIDDEN) break;
-            if (cJSON_IsString(item) && strlen(item->valuestring) < MAX_DIALOG_LEN) {
-                strncpy(g_cfg.dialog_ids[idx], item->valuestring, MAX_DIALOG_LEN - 1);
-                g_cfg.dialog_count++;
-                idx++;
+            if (cJSON_IsNumber(item)) {
+                g_cfg.hidden_ids[idx++] = (int64_t)item->valuedouble;
+            } else if (cJSON_IsString(item)) {
+                g_cfg.hidden_ids[idx++] = (int64_t)strtoll(item->valuestring, NULL, 10);
             }
         }
+        g_cfg.hidden_count = idx;
     }
 
-    pthread_mutex_unlock(&g_cfg_mutex);
+    pthread_mutex_unlock(&g_cfg_mtx);
     cJSON_Delete(root);
-
-    LOGI("Config loaded: %d hidden dialogs, list=%d search=%d share=%d notif=%d",
-         g_cfg.dialog_count, g_cfg.hide_in_list, g_cfg.hide_in_search,
-         g_cfg.hide_in_share, g_cfg.hide_in_notifications);
+    LOGI("Config: %d hidden, list=%d notif=%d",
+         g_cfg.hidden_count, g_cfg.hide_in_list, g_cfg.hide_in_notifications);
 }
 
-/* ── Dialog catalog caching (via Unix socket, not file) ─── */
+/* ── JNI env helper (for hook callbacks) ── */
 
-/*
- * Cache the dialog catalog as a JSON string in memory.
- * The WebUI retrieves it by connecting to the Unix socket.
- * No plaintext file is written to disk.
- */
-static void cache_dialogs(JNIEnv *env, jobject dialog_list) {
-    if (!dialog_list) return;
+static JNIEnv *get_env(void) {
+    JNIEnv *env = NULL;
+    if (g_jvm) (*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL);
+    return env;
+}
 
-    jclass al_cls = (*env)->FindClass(env, "java/util/ArrayList");
-    if (!al_cls) return;
+/* ── Filtering helpers ────────────────── */
 
-    jmethodID mid_size = (*env)->GetMethodID(env, al_cls, "size", "()I");
-    jmethodID mid_get  = (*env)->GetMethodID(env, al_cls, "get", "(I)Ljava/lang/Object;");
-    if (!mid_size || !mid_get) return;
+static bool is_hidden(int64_t id) {
+    pthread_mutex_lock(&g_cfg_mtx);
+    bool hidden = false;
+    if (!g_cfg.revealed) {
+        for (int i = 0; i < g_cfg.hidden_count; i++)
+            if (g_cfg.hidden_ids[i] == id) { hidden = true; break; }
+    }
+    pthread_mutex_unlock(&g_cfg_mtx);
+    return hidden;
+}
 
-    int sz = (*env)->CallIntMethod(env, dialog_list, mid_size);
+static bool should_hide_surface(const char *surf) {
+    pthread_mutex_lock(&g_cfg_mtx);
+    bool h;
+    if (strcmp(surf, "list") == 0)        h = g_cfg.hide_in_list;
+    else if (strcmp(surf, "search") == 0)  h = g_cfg.hide_in_search;
+    else if (strcmp(surf, "share") == 0)   h = g_cfg.hide_in_share;
+    else                                   h = false;
+    pthread_mutex_unlock(&g_cfg_mtx);
+    return h;
+}
 
-    /* Build JSON catalog using cJSON (no manual string concatenation) */
-    cJSON *root = cJSON_CreateArray();
-    if (!root) return;
+/* Remove hidden dialogs from an ArrayList in-place (reverse iteration) */
+static void filter_dialogs_list(JNIEnv *env, jobject list, const char *surface) {
+    if (!list) return;
 
-    jclass dialog_cls = (*env)->FindClass(env, "org/telegram/tgnet/TLRPC$Dialog");
-    jfieldID fid_id = dialog_cls ?
-        (*env)->GetFieldID(env, dialog_cls, "id", "J") : NULL;
+    jclass al = (*env)->FindClass(env, "java/util/ArrayList");
+    jmethodID sz = (*env)->GetMethodID(env, al, "size", "()I");
+    jmethodID getm = (*env)->GetMethodID(env, al, "get", "(I)Ljava/lang/Object;");
+    jmethodID remm = (*env)->GetMethodID(env, al, "remove", "(I)Ljava/lang/Object;");
+    if (!sz || !getm || !remm) return;
 
-    for (int i = 0; i < sz && i < 500; i++) {
-        jobject dialog = (*env)->CallObjectMethod(env, dialog_list, mid_get, i);
-        if (!dialog) continue;
+    /* Cache full catalog before filtering */
+    jclass dlg_cls = (*env)->FindClass(env, "org/telegram/tgnet/TLRPC$Dialog");
+    jfieldID id_fid = dlg_cls ? (*env)->GetFieldID(env, dlg_cls, "id", "J") : NULL;
 
-        jlong id_val = fid_id ? (*env)->GetLongField(env, dialog, fid_id) : 0;
-        char id_str[MAX_DIALOG_LEN];
-        snprintf(id_str, sizeof(id_str), "%lld", (long long)id_val);
-
-        /* Try to get a name from last_message.peer */
-        char name[128] = "Unknown";
-        char type[16] = "user";
-
-        jfieldID fid_last_msg = (*env)->GetFieldID(env, dialog_cls,
-            "last_message", "Lorg/telegram/tgnet/TLRPC$Message;");
-        jobject last_msg = fid_last_msg ?
-            (*env)->GetObjectField(env, dialog, fid_last_msg) : NULL;
-
-        if (last_msg) {
-            jclass msg_cls = (*env)->GetObjectClass(env, last_msg);
-            jfieldID fid_from_id = (*env)->GetFieldID(env, msg_cls,
-                "from_id", "Lorg/telegram/tgnet/TLRPC$Peer;");
-            jobject peer = fid_from_id ?
-                (*env)->GetObjectField(env, last_msg, fid_from_id) : NULL;
-
-            if (peer) {
-                jclass p_cls = (*env)->GetObjectClass(env, peer);
-                jfieldID fid_chat_id = (*env)->GetFieldID(env, p_cls, "chat_id", "J");
-                jfieldID fid_channel_id = (*env)->GetFieldID(env, p_cls, "channel_id", "J");
-                jlong cid  = fid_chat_id ? (*env)->GetLongField(env, peer, fid_chat_id) : 0;
-                jlong chid = fid_channel_id ? (*env)->GetLongField(env, peer, fid_channel_id) : 0;
-
-                if (cid > 0)  strcpy(type, "chat");
-                else if (chid > 0) strcpy(type, "channel");
-            }
-            (*env)->DeleteLocalRef(env, peer);
-            (*env)->DeleteLocalRef(env, msg_cls);
-        }
-        (*env)->DeleteLocalRef(env, last_msg);
-        (*env)->DeleteLocalRef(env, dialog);
-
-        cJSON *entry = cJSON_CreateObject();
-        if (entry) {
-            cJSON_AddStringToObject(entry, "id", id_str);
-            cJSON_AddStringToObject(entry, "name", name);
-            cJSON_AddStringToObject(entry, "type", type);
-            cJSON_AddItemToArray(root, entry);
+    /* Build catalog from full list */
+    cJSON *arr = cJSON_CreateArray();
+    jint n = (*env)->CallIntMethod(env, list, sz);
+    for (jint i = 0; i < n && i < 500; i++) {
+        jobject d = (*env)->CallObjectMethod(env, list, getm, i);
+        if (d) {
+            jlong id_val = id_fid ? (*env)->GetLongField(env, d, id_fid) : 0;
+            cJSON *entry = cJSON_CreateObject();
+            cJSON *id_item = cJSON_CreateNumber((double)id_val);
+            if (id_item) cJSON_AddItemToObject(entry, "id", id_item);
+            cJSON_AddItemToArray(arr, entry);
+            (*env)->DeleteLocalRef(env, d);
         }
     }
-
-    /* Serialize to a compact JSON string */
-    char *json_str = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-
+    char *json_str = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
     if (json_str) {
-        pthread_mutex_lock(&g_cache_mutex);
+        pthread_mutex_lock(&g_cat_mtx);
         free(g_dialog_cache);
         g_dialog_cache = json_str;
-        pthread_mutex_unlock(&g_cache_mutex);
+        pthread_mutex_unlock(&g_cat_mtx);
     }
+
+    /* Filter if needed */
+    if (g_cfg.revealed || !should_hide_surface(surface)) {
+        if (dlg_cls) (*env)->DeleteLocalRef(env, dlg_cls);
+        return;
+    }
+
+    for (jint i = n - 1; i >= 0; i--) {
+        jobject d = (*env)->CallObjectMethod(env, list, getm, i);
+        if (!d) continue;
+        jlong id_val = id_fid ? (*env)->GetLongField(env, d, id_fid) : 0;
+        if (id_val != 0 && is_hidden((int64_t)id_val)) {
+            (*env)->CallObjectMethod(env, list, remm, i);
+            LOGD("Filtered dialog %lld on %s", (long long)id_val, surface);
+        }
+        (*env)->DeleteLocalRef(env, d);
+    }
+
+    if (dlg_cls) (*env)->DeleteLocalRef(env, dlg_cls);
 }
 
-/* ── Unix domain socket server ─────────────────────────── */
+/* ── Unix socket server (replaces dialogs.json) ─────────────── */
+/* SO_PEERCRED: kernel provides connecting UID. Only uid==0 (root) allowed. */
 
-/*
- * SO_PEERCRED: the Linux kernel provides the connecting process's
- * UID automatically.  We verify uid == 0 (root) before serving
- * any data, so a non-root app cannot harvest the chat catalog.
- */
 static void *socket_server_thread(void *arg) {
     (void)arg;
-
-    /* Create Unix domain socket */
     int srv = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (srv < 0) {
-        LOGE("socket() failed: %s", strerror(errno));
-        return NULL;
-    }
+    if (srv < 0) { LOGE("socket: %s", strerror(errno)); return NULL; }
 
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
+    struct sockaddr_un addr = {0};
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, SOCK_PATH, sizeof(addr.sun_path) - 1);
-
-    /* Remove stale socket file if it exists */
     unlink(SOCK_PATH);
 
     if (bind(srv, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        LOGE("bind() on %s failed: %s", SOCK_PATH, strerror(errno));
-        close(srv);
-        return NULL;
+        LOGE("bind: %s", strerror(errno)); close(srv); return NULL;
     }
-
-    /* 0600: only root can read/write the socket */
     chmod(SOCK_PATH, 0600);
+    if (listen(srv, 5) < 0) { LOGE("listen: %s", strerror(errno)); close(srv); return NULL; }
+    LOGI("Socket server on %s", SOCK_PATH);
 
-    if (listen(srv, 5) < 0) {
-        LOGE("listen() failed: %s", strerror(errno));
-        close(srv);
-        return NULL;
-    }
-
-    g_socket_fd = srv;
-    LOGI("Unix socket server listening on %s", SOCK_PATH);
-
-    while (1) {
+    for (;;) {
         int client = accept(srv, NULL, NULL);
-        if (client < 0) {
-            LOGW("accept() failed: %s", strerror(errno));
-            sleep(1);
-            continue;
-        }
+        if (client < 0) { LOGW("accept: %s", strerror(errno)); sleep(1); continue; }
 
-        /* Verify peer credentials (must be root / uid 0) */
         struct ucred cred;
-        socklen_t cred_len = sizeof(cred);
-        if (getsockopt(client, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) < 0) {
-            LOGW("getsockopt(SO_PEERCRED) failed: %s", strerror(errno));
-            close(client);
-            continue;
-        }
-        if (cred.uid != 0) {
-            LOGW("Rejected socket connection from uid=%d (need root)", cred.uid);
-            close(client);
-            continue;
+        socklen_t cl = sizeof(cred);
+        if (getsockopt(client, SOL_SOCKET, SO_PEERCRED, &cred, &cl) == 0 && cred.uid != 0) {
+            LOGW("Reject uid=%d", cred.uid); close(client); continue;
         }
 
-        /* Read request type */
         char req[32] = {0};
         ssize_t rn = read(client, req, sizeof(req) - 1);
         if (rn > 0) {
             req[rn] = '\0';
-            /* Strip trailing whitespace/newline */
-            while (rn > 0 && (req[rn-1] == '\n' || req[rn-1] == '\r' || req[rn-1] == ' ')) {
-                req[--rn] = '\0';
-            }
+            for (ssize_t i = rn - 1; i >= 0 && (req[i]=='\n'||req[i]=='\r'||req[i]==' '); i--)
+                req[i] = '\0';
 
-            if (strncmp(req, "GET_DIALOGS", 11) == 0) {
-                /* Send cached dialog catalog */
-                pthread_mutex_lock(&g_cache_mutex);
-                const char *data = g_dialog_cache ? g_dialog_cache : "[]";
-                size_t len = strlen(data);
-                pthread_mutex_unlock(&g_cache_mutex);
-                /* Send length-prefixed JSON */
-                char header[16];
-                snprintf(header, sizeof(header), "%08zx\n", len);
-                write(client, header, strlen(header));
-                write(client, data, len);
-                write(client, "\n", 1);
-            } else if (strncmp(req, "GET_CONFIG", 10) == 0) {
-                /* Send current config snapshot */
-                pthread_mutex_lock(&g_cfg_mutex);
-                cJSON *root = cJSON_CreateObject();
-                cJSON *arr = cJSON_CreateArray();
-                for (int i = 0; i < g_cfg.dialog_count; i++)
-                    cJSON_AddItemToArray(arr, cJSON_CreateString(g_cfg.dialog_ids[i]));
-                cJSON_AddItemToObject(root, "selected_dialogs", arr);
-                cJSON_AddBoolToObject(root, "hide_in_list", g_cfg.hide_in_list);
-                cJSON_AddBoolToObject(root, "hide_in_search", g_cfg.hide_in_search);
-                cJSON_AddBoolToObject(root, "hide_in_share", g_cfg.hide_in_share);
-                cJSON_AddBoolToObject(root, "hide_in_notifications", g_cfg.hide_in_notifications);
-                pthread_mutex_unlock(&g_cfg_mutex);
-                char *cfg_str = cJSON_PrintUnformatted(root);
-                if (cfg_str) {
-                    write(client, cfg_str, strlen(cfg_str));
-                    free(cfg_str);
-                }
-                cJSON_Delete(root);
-            } else {
-                write(client, "ERR unknown command\n", 20);
-            }
+            pthread_mutex_lock(&g_cat_mtx);
+            const char *data = g_dialog_cache ? g_dialog_cache : "[]";
+            pthread_mutex_unlock(&g_cat_mtx);
+            write(client, data, strlen(data));
+            write(client, "\n", 1);
         }
         close(client);
     }
-
+    close(srv);
     return NULL;
 }
 
@@ -351,378 +274,210 @@ static void start_socket_server(void) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&tid, &attr, socket_server_thread, NULL) != 0) {
-        LOGE("Failed to start socket server thread: %s", strerror(errno));
-    }
+    if (pthread_create(&tid, &attr, socket_server_thread, NULL) != 0)
+        LOGE("socket thread: %s", strerror(errno));
     pthread_attr_destroy(&attr);
 }
 
-/* ── Filtering ──────────────────────────────────────────── */
-
-static bool is_dialog_hidden(const char *id_str) {
-    /* Lock not needed for reads of revealed flag + dialog_ids —
-     * g_cfg is set once at load_config and only briefly updated.
-     * Use atomic check on revealed for the gesture toggle. */
-    if (g_cfg.revealed) return false;
-    for (int i = 0; i < g_cfg.dialog_count; i++) {
-        if (strcmp(g_cfg.dialog_ids[i], id_str) == 0)
-            return true;
-    }
-    return false;
-}
-
-static bool should_hide(const char *id_str, const char *surface) {
-    if (!is_dialog_hidden(id_str)) return false;
-    if (strcmp(surface, "list") == 0)         return g_cfg.hide_in_list;
-    if (strcmp(surface, "search") == 0)       return g_cfg.hide_in_search;
-    if (strcmp(surface, "share") == 0)        return g_cfg.hide_in_share;
-    if (strcmp(surface, "notifications") == 0) return g_cfg.hide_in_notifications;
-    return false;
-}
-
-/* ── Five-tap reveal ───────────────────────────────────── */
+/* ── Hook callbacks (entry-point replacement) ───────────────── */
 
 /*
- * Five rapid taps on the Telegram header (Y < 220px) within 800ms
- * toggle reveal mode.  Uses CLOCK_MONOTONIC for sub-second precision.
- *
- * Architecture note: dispatchTouchEvent is a pure Java method on
- * android.view.View, so hook_jni_native_methods CANNOT intercept it.
- * The 5-tap gesture is detected via a PLT hook on the native bridge
- * function android_view_View_dispatchTouchEvent in libandroid_runtime.so.
- * If the PLT symbol name changes in a future Android version, the
- * gesture detection silently degrades to "always hidden" — a safe
- * failure mode (no false reveals).
- *
- * TODO: Replace with Pine/SandHook Java-level hooking for reliable
- * gesture detection across Android versions.
+ * MessagesController.getDialogs(int folderId) → ArrayList
+ * ARM64 quick ABI: x0=this(jobject), x1=folderId(jint), return x0(jobject)
  */
-static void check_reveal_gesture(float y) {
-    if (y >= 220.0f) return;  /* Not in the header region */
+static jobject (*orig_get_dialogs)(jobject thiz, jint folder_id) = NULL;
 
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    long now = (long)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+static jobject hk_get_dialogs(jobject thiz, jint folder_id) {
+    JNIEnv *env = get_env();
+    if (!env || !orig_get_dialogs)
+        return orig_get_dialogs ? orig_get_dialogs(thiz, folder_id) : NULL;
 
-    pthread_mutex_lock(&g_cfg_mutex);
-    if (now - g_cfg.last_tap_ms > TAP_WINDOW_MS)
-        g_cfg.tap_count = 0;
-    g_cfg.tap_count++;
-    g_cfg.last_tap_ms = now;
-
-    if (g_cfg.tap_count >= TAP_THRESHOLD) {
-        g_cfg.tap_count = 0;
-        g_cfg.revealed = !g_cfg.revealed;
-        LOGI("5-tap gesture → reveal=%s", g_cfg.revealed ? "ON" : "OFF");
-    }
-    pthread_mutex_unlock(&g_cfg_mutex);
+    jobject list = orig_get_dialogs(thiz, folder_id);
+    if (list) filter_dialogs_list(env, list, "list");
+    return list;
 }
 
-/* ── Hook storage ───────────────────────────────────────── */
-
-static void *orig_get_dialogs = NULL;
-static void *orig_load_dialogs = NULL;
-static void *orig_dispatch_touch = NULL;
-
 /*
- * Replacement for Telegram's dialog-loading native method.
- *
- * We hook whichever Dialogs-loading native method Telegram exposes.
- * The exact method name/signature varies by Telegram version.
- *
- * On each call we:
- *   1. Cache the full dialog catalog (for WebUI socket retrieval)
- *   2. Return a NEW filtered ArrayList (do not mutate Telegram's list)
+ * NotificationCenter.postNotificationName(int id, Object[] args)
+ * ARM64 ABI: x0=this, x1=id, x2=args(jobjectArray), return void
  */
+static void (*orig_post_notification)(jobject thiz, jint id, jobjectArray args) = NULL;
 
-/* Helper: create a new ArrayList excluding hidden dialogs */
-static jobject filter_dialogs_list(JNIEnv *env, jobject orig_list,
-                                    const char *surface) {
-    if (!orig_list) return NULL;
+static int64_t extract_dialog_id(JNIEnv *env, jobject arg) {
+    if (!arg) return 0;
+    jclass cls = (*env)->GetObjectClass(env, arg);
+    if (!cls) return 0;
+    int64_t result = 0;
 
-    jclass al_cls = (*env)->FindClass(env, "java/util/ArrayList");
-    if (!al_cls) return orig_list;
+    jfieldID fid = (*env)->GetFieldID(env, cls, "dialog_id", "J");
+    if (fid) result = (*env)->GetLongField(env, arg, fid);
 
-    jmethodID mid_init  = (*env)->GetMethodID(env, al_cls, "<init>", "(I)V");
-    jmethodID mid_add   = (*env)->GetMethodID(env, al_cls, "add", "(Ljava/lang/Object;)Z");
-    jmethodID mid_size  = (*env)->GetMethodID(env, al_cls, "size", "()I");
-    jmethodID mid_get   = (*env)->GetMethodID(env, al_cls, "get", "(I)Ljava/lang/Object;");
-
-    /* Always cache the full catalog for the WebUI */
-    cache_dialogs(env, orig_list);
-
-    /* If no filtering needed, return original */
-    if (g_cfg.revealed) return orig_list;
-    bool any_surface = g_cfg.hide_in_list || g_cfg.hide_in_search ||
-                       g_cfg.hide_in_share;
-    if (!any_surface) return orig_list;
-
-    jclass dialog_cls = (*env)->FindClass(env, "org/telegram/tgnet/TLRPC$Dialog");
-    if (!dialog_cls) {
-        LOGW("TLRPC$Dialog class not found");
-        return orig_list;
-    }
-    jfieldID fid_id = (*env)->GetFieldID(env, dialog_cls, "id", "J");
-    if (!fid_id) {
-        LOGW("Dialog.id field not found");
-        return orig_list;
-    }
-
-    int sz = (*env)->CallIntMethod(env, orig_list, mid_size);
-
-    /* Quick check: any dialogs actually hidden? */
-    bool need_filter = false;
-    for (int i = 0; i < sz; i++) {
-        jobject d = (*env)->CallObjectMethod(env, orig_list, mid_get, i);
-        if (d) {
-            jlong id_val = (*env)->GetLongField(env, d, fid_id);
-            char id_str[MAX_DIALOG_LEN];
-            snprintf(id_str, sizeof(id_str), "%lld", (long long)id_val);
-            if (should_hide(id_str, surface)) {
-                need_filter = true;
-                (*env)->DeleteLocalRef(env, d);
-                break;
+    if (result == 0) {
+        jfieldID om_fid = (*env)->GetFieldID(env, cls, "messageOwner",
+                                              "Lorg/telegram/tgnet/TLRPC$Message;");
+        if (om_fid) {
+            jobject owner = (*env)->GetObjectField(env, arg, om_fid);
+            if (owner) {
+                jclass oc = (*env)->GetObjectClass(env, owner);
+                jfieldID dfid = (*env)->GetFieldID(env, oc, "dialog_id", "J");
+                if (dfid) result = (*env)->GetLongField(env, owner, dfid);
+                (*env)->DeleteLocalRef(env, oc);
+                (*env)->DeleteLocalRef(env, owner);
             }
-            (*env)->DeleteLocalRef(env, d);
         }
     }
-
-    if (!need_filter) return orig_list;
-
-    /* Create a filtered copy — do NOT mutate Telegram's list */
-    jobject filtered = (*env)->NewObject(env, al_cls, mid_init, sz);
-    if (!filtered) return orig_list;
-
-    for (int i = 0; i < sz; i++) {
-        jobject d = (*env)->CallObjectMethod(env, orig_list, mid_get, i);
-        if (!d) continue;
-        jlong id_val = (*env)->GetLongField(env, d, fid_id);
-        char id_str[MAX_DIALOG_LEN];
-        snprintf(id_str, sizeof(id_str), "%lld", (long long)id_val);
-        if (should_hide(id_str, surface)) {
-            LOGD("Hiding dialog %s on %s surface", id_str, surface);
-        } else {
-            (*env)->CallBooleanMethod(env, filtered, mid_add, d);
-        }
-        (*env)->DeleteLocalRef(env, d);
-    }
-
-    /* Clear any pending exception from failed JNI calls */
-    if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
-    }
-
-    return filtered;
-}
-
-/* ── Hook wrappers ───────────────────────────────────────── */
-
-/*
- * hk_get_dialogs — hook for MessagesStorage.getDialogs(I)
- * We handle the int-arg case.  If the signature mismatches, the
- * hook silently fails (MeowZygisk skips non-matching methods).
- */
-static jobject JNICALL hk_get_dialogs(JNIEnv *env, jobject thiz) {
-    (void)thiz;
-    if (!orig_get_dialogs) {
-        LOGW("orig_get_dialogs is NULL — hook not properly installed");
-        return NULL;
-    }
-    jobject list = ((jobject (*)(JNIEnv*, jobject))orig_get_dialogs)(env, thiz);
-    if (!list) return NULL;
-    return filter_dialogs_list(env, list, "list");
-}
-
-/*
- * hk_get_dialogs_int — hook for MessagesController.getDialogs(I)
- * Some Telegram versions pass a folderId int argument.
- */
-static jobject JNICALL hk_get_dialogs_int(JNIEnv *env, jobject thiz, jint folder_id) {
-    (void)thiz;
-    if (!orig_get_dialogs) {
-        LOGW("orig_get_dialogs is NULL — hook not properly installed");
-        return NULL;
-    }
-    jobject list = ((jobject (*)(JNIEnv*, jobject, jint))orig_get_dialogs)(env, thiz, folder_id);
-    if (!list) return NULL;
-    return filter_dialogs_list(env, list, "list");
-}
-
-/*
- * hk_load_dialogs — hook for MessagesStorage.loadDialogs(II)
- * Native storage-layer entry point for dialog loading.
- * Best-effort: may not exist as JNI on all Telegram versions.
- */
-static jobject JNICALL hk_load_dialogs(JNIEnv *env, jobject thiz,
-                                        jint offset, jint count) {
-    (void)thiz;
-    if (!orig_load_dialogs) {
-        LOGW("orig_load_dialogs is NULL — hook not properly installed");
-        return NULL;
-    }
-    jobject list = ((jobject (*)(JNIEnv*, jobject, jint, jint))orig_load_dialogs)
-                   (env, thiz, offset, count);
-    if (!list) return NULL;
-    return filter_dialogs_list(env, list, "list");
-}
-
-/* ── Hook: Header touch for 5-tap gesture ──────────────── */
-
-/*
- * PLT hook on android_view_View_dispatchTouchEvent in
- * libandroid_runtime.so.  This intercepts the JNI bridge function that
- * ART calls when View.dispatchTouchEvent is invoked.
- *
- * We check ACTION_UP with Y < 220px (header region) and accumulate
- * taps.  Five taps within 800ms toggle reveal mode.
- */
-static jboolean JNICALL hk_dispatch_touch(JNIEnv *env, jobject thiz, jobject event) {
-    /* Check if this is an ACTION_UP */
-    jclass me_cls = (*env)->FindClass(env, "android/view/MotionEvent");
-    jmethodID mid_action = (*env)->GetMethodID(env, me_cls, "getAction", "()I");
-    jint action = (*env)->CallIntMethod(env, event, mid_action);
-
-    if (action == 1) {  /* ACTION_UP */
-        jmethodID mid_y = (*env)->GetMethodID(env, me_cls, "getY", "()F");
-        jfloat y = (*env)->CallFloatMethod(env, event, mid_y);
-        check_reveal_gesture((float)y);
-    }
-
-    /* Call original */
-    if (orig_dispatch_touch) {
-        return ((jboolean (*)(JNIEnv*, jobject, jobject))orig_dispatch_touch)(env, thiz, event);
-    }
-
-    /* Fallback — let the event propagate */
-    jclass view_cls = (*env)->GetObjectClass(env, thiz);
-    jmethodID mid_super = (*env)->GetMethodID(env, view_cls,
-        "dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
-    jboolean result = JNI_FALSE;
-    if (mid_super) {
-        result = (*env)->CallBooleanMethod(env, thiz, mid_super, event);
-    }
-    (*env)->DeleteLocalRef(env, view_cls);
+    (*env)->DeleteLocalRef(env, cls);
     return result;
 }
 
-/* ── Native method registration ────────────────────────── */
+static bool notif_for_hidden_chat(JNIEnv *env, jint id, jobjectArray args) {
+    if (id != g_nc_did_receive_new_messages && id != g_nc_push_messages_updated)
+        return false;
+    if (!args) return false;
+    jsize len = (*env)->GetArrayLength(env, args);
+    for (jsize i = 0; i < len; i++) {
+        jobject arg = (*env)->GetObjectArrayElement(env, args, i);
+        if (arg) {
+            int64_t dlg = extract_dialog_id(env, arg);
+            (*env)->DeleteLocalRef(env, arg);
+            if (dlg != 0 && is_hidden(dlg)) return true;
+        }
+    }
+    return false;
+}
 
-static void register_telegram_hooks(struct rezygisk_api *api, JNIEnv *env) {
-    /*
-     * Zygisk hook strategy:
-     *
-     * hook_jni_native_methods only works on methods registered as JNI
-     * native methods via JNIEnv::RegisterNatives.  Telegram's
-     * MessagesController.getDialogs() and View.dispatchTouchEvent are
-     * pure Java methods in DEX bytecode — they will NOT be hooked by
-     * this API.
-     *
-     * We register best-effort hooks on known JNI native methods that
-     * exist in some Telegram versions.  For methods that are not JNI
-     * native, the hook silently fails (MeowZygisk skips non-matching).
-     *
-     * After the call, m.fnPtr holds the ORIGINAL function pointer.
-     * We MUST capture it before using it in our replacement.
-     *
-     * TODO: Migrate to Pine Hook (Java-level ART method hooking) for
-     * reliable interception of pure Java methods.  See:
-     *   https://github.com/87mole/Pine
-     * Pine can be loaded as a Dex in the Zygisk module and used via its
-     * Java API, or its native bridge can be called from C via JNI.
-     */
+static void hk_post_notification(jobject thiz, jint id, jobjectArray args) {
+    JNIEnv *env = get_env();
+    pthread_mutex_lock(&g_cfg_mtx);
+    bool suppress = g_cfg.hide_in_notifications && !g_cfg.revealed;
+    pthread_mutex_unlock(&g_cfg_mtx);
 
-    bool any_hooks = false;
+    if (suppress && env && notif_for_hidden_chat(env, id, args)) {
+        LOGD("Suppressing notification id=%d for hidden chat", id);
+        return;  /* don't call original */
+    }
+    if (orig_post_notification) orig_post_notification(thiz, id, args);
+}
 
-    /* Hook 1: MessagesStorage.getDialogs(I)Ljava/util/ArrayList; */
-    JNINativeMethod m1 = {
+/*
+ * View.dispatchTouchEvent(MotionEvent) → boolean
+ * ARM64 ABI: x0=this, x1=event, return x0(jboolean)
+ */
+static jboolean (*orig_dispatch_touch)(jobject thiz, jobject event) = NULL;
+
+static jboolean hk_dispatch_touch(jobject thiz, jobject event) {
+    JNIEnv *env = get_env();
+
+    if (env && event) {
+        jclass mc = (*env)->FindClass(env, "android/view/MotionEvent");
+        if (mc) {
+            jmethodID am = (*env)->GetStaticMethodID(env, mc, "getActionMasked", "(I)I");
+            jfieldID af = (*env)->GetStaticFieldID(env, mc, "ACTION_DOWN", "I");
+            jfieldID yf = (*env)->GetFieldID(env, mc, "mY", "F");
+
+            if (am && af) {
+                jint action_down = (*env)->GetStaticIntField(env, mc, af);
+                jint raw = (*env)->CallStaticIntMethod(env, mc, am, 0);
+                jint masked = raw & 0xFFF;
+                if (masked == action_down) {
+                    float y = yf ? (*env)->GetFloatField(env, event, yf) : 0;
+                    if (y >= 0 && y < 220.0f) {  /* header region */
+                        struct timespec ts;
+                        clock_gettime(CLOCK_MONOTONIC, &ts);
+                        int64_t now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+
+                        pthread_mutex_lock(&g_cfg_mtx);
+                        if (now - g_cfg.last_tap_ms > TAP_WINDOW_MS)
+                            g_cfg.tap_count = 0;
+                        g_cfg.tap_count++;
+                        g_cfg.last_tap_ms = now;
+                        if (g_cfg.tap_count >= 5) {
+                            g_cfg.tap_count = 0;
+                            g_cfg.revealed = !g_cfg.revealed;
+                            LOGI("5-tap → reveal=%s", g_cfg.revealed ? "ON" : "OFF");
+                        }
+                        pthread_mutex_unlock(&g_cfg_mtx);
+                    }
+                }
+            }
+            (*env)->DeleteLocalRef(env, mc);
+        }
+    }
+
+    if (orig_dispatch_touch) return orig_dispatch_touch(thiz, event);
+    return JNI_FALSE;
+}
+
+/* ── Resolve NotificationCenter constants at runtime ───────── */
+
+static int resolve_nc_const(JNIEnv *env, const char *name) {
+    jclass nc = (*env)->FindClass(env, "org/telegram/messenger/NotificationCenter");
+    if (!nc) { LOGW("NotificationCenter class not found"); return -1; }
+    jfieldID fid = (*env)->GetStaticFieldID(env, nc, name, "I");
+    if (!fid) { LOGW("NC.%s field not found", name); return -1; }
+    return (*env)->GetStaticIntField(env, nc, fid);
+}
+
+static void resolve_nc_constants(JNIEnv *env) {
+    g_nc_did_receive_new_messages = resolve_nc_const(env, "didReceiveNewMessages");
+    g_nc_push_messages_updated = resolve_nc_const(env, "pushMessagesUpdated");
+    LOGI("NC constants: didReceiveNewMessages=%d pushMessagesUpdated=%d",
+         g_nc_did_receive_new_messages, g_nc_push_messages_updated);
+}
+
+/* ── Hook registration (ART entry-point replacement) ────────── */
+
+static void register_telegram_hooks(JNIEnv *env) {
+    /* 1. MessagesController.getDialogs(int) → ArrayList  */
+    if (art_hook_method(env,
+        "org/telegram/messenger/MessagesController",
         "getDialogs", "(I)Ljava/util/ArrayList;",
-        (void*)hk_get_dialogs_int
-    };
-    api->hook_jni_native_methods(env,
-        "org/telegram/messenger/MessagesStorage", &m1, 1);
-    orig_get_dialogs = m1.fnPtr;
-    if (orig_get_dialogs) {
-        LOGI("Hooked MessagesStorage.getDialogs(I)");
-        any_hooks = true;
+        (void *)hk_get_dialogs, (void **)&orig_get_dialogs) == 0) {
+        LOGI("Hooked MessagesController.getDialogs(I)");
     } else {
-        LOGW("getDialogs(I) hook not bound — not a JNI native method");
+        LOGW("getDialogs hook failed — chat list hiding unavailable");
     }
 
-    /* Hook 2: MessagesStorage.loadDialogs(II)Ljava/util/ArrayList; (fallback) */
-    JNINativeMethod m2 = {
-        "loadDialogs", "(II)Ljava/util/ArrayList;",
-        (void*)hk_load_dialogs
-    };
-    api->hook_jni_native_methods(env,
-        "org/telegram/messenger/MessagesStorage", &m2, 1);
-    orig_load_dialogs = m2.fnPtr;
-    if (orig_load_dialogs) {
-        LOGI("Hooked MessagesStorage.loadDialogs(II)");
-        any_hooks = true;
+    /* 2. NotificationCenter.postNotificationName(int, Object[]) → void */
+    resolve_nc_constants(env);
+    if (art_hook_method(env,
+        "org/telegram/messenger/NotificationCenter",
+        "postNotificationName", "(I[Ljava/lang/Object;)V",
+        (void *)hk_post_notification, (void **)&orig_post_notification) == 0) {
+        LOGI("Hooked NotificationCenter.postNotificationName");
     } else {
-        LOGW("loadDialogs(II) hook not bound — not a JNI native method");
+        LOGW("postNotificationName hook failed — notification hiding unavailable");
     }
 
-    /* Hook 3: 5-tap gesture via PLT hook on View.dispatchTouchEvent.
-     * dispatchTouchEvent is a Java method, NOT a JNI native method,
-     * so hook_jni_native_methods won't work.  We use plt_hook_register
-     * to intercept the native bridge function in libandroid_runtime.so.
-     *
-     * NOTE: The PLT hook intercepts the C-level JNI bridge function,
-     * not the Java method directly.  The function signature is:
-     *   jboolean android_view_View_dispatchTouchEvent(JNIEnv*, jobject, jobject)
-     * which maps to our hk_dispatch_touch wrapper.
-     *
-     * If the symbol name changes in a future Android version, the
-     * PLT hook fails silently and tap detection is unavailable.
-     * Users can still reveal via shell command: echo 'REVEAL' > socket
-     */
-    api->plt_hook_register("libandroid_runtime.so",
-                           "android_view_View_dispatchTouchEvent",
-                           (void*)hk_dispatch_touch, &orig_dispatch_touch);
-    api->plt_hook_commit();
-    if (orig_dispatch_touch) {
-        LOGI("PLT hooked View.dispatchTouchEvent for 5-tap gesture");
-        any_hooks = true;
+    /* 3. View.dispatchTouchEvent(MotionEvent) → boolean */
+    if (art_hook_method(env,
+        "android/view/View",
+        "dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z",
+        (void *)hk_dispatch_touch, (void **)&orig_dispatch_touch) == 0) {
+        LOGI("Hooked View.dispatchTouchEvent for 5-tap gesture");
     } else {
-        LOGW("PLT hook on dispatchTouchEvent failed — 5-tap gesture unavailable");
-    }
-
-    if (any_hooks) {
-        LOGI("Telegram hooks registered (%d bind(s) succeeded)", any_hooks ? 1 : 0);
-    } else {
-        LOGW("No hooks bound — module active but no methods hooked this session");
+        LOGW("dispatchTouchEvent hook failed — 5-tap gesture unavailable");
     }
 }
 
-/* ── State ──────────────────────────────────────────────── */
+/* ── ABI callbacks ────────────── */
 
-static bool g_hooks_registered = false;
-static struct rezygisk_api *g_api = NULL;
-static JNIEnv *g_jenv = NULL;
-
-/* ── ABI callbacks ──────────────────────────────────────── */
-
-static void my_pre_app_specialize(void *impl, void *args) {
-    (void)impl; (void)args;
-}
+static void my_pre_app_specialize(void *impl, void *args) { (void)impl; (void)args; }
 
 static void my_post_app_specialize(void *impl, const void *args) {
     (void)impl; (void)args;
-
     if (g_hooks_registered) return;
     g_hooks_registered = true;
 
-    if (!g_api || !g_jenv) {
-        LOGE("API or JNI env not available in post_app_specialize");
-        return;
-    }
+    JNIEnv *env = get_env();
+    if (!env) { LOGE("Cannot attach thread for hooks"); return; }
 
-    LOGI("post_app_specialize: registering Telegram hooks");
-    register_telegram_hooks((struct rezygisk_api *)g_api, g_jenv);
+    LOGI("post_app_specialize: registering hooks (ART entry-point replacement)");
+    register_telegram_hooks(env);
+    start_socket_server();
 }
 
-/* ── Zygisk module entry ────────────────────────────────── */
+/* ── Zygisk entry ─────────────── */
 
 static struct rezygisk_abi g_abi = {
     .api_version = REZYGISK_API_VERSION,
@@ -731,55 +486,33 @@ static struct rezygisk_abi g_abi = {
 
 void zygisk_module_entry(struct rezygisk_api *api, void *env) {
     JNIEnv *jenv = (JNIEnv *)env;
+    LOGI("Telegram Chat Hider loading");
 
-    LOGI("Telegram Chat Hider Zygisk module loading");
-
-    /* Resolve module directory */
-    if (api->get_module_dir(g_module_dir) != 0 || g_module_dir[0] == '\0') {
+    if (api->get_module_dir(g_module_dir) != 0 || g_module_dir[0] == '\0')
         strcpy(g_module_dir, "/data/adb/modules/telegram_chat_hider");
-    }
-    LOGI("Module dir: %s", g_module_dir);
 
-    /*
-     * Determine current process name via /proc/self/cmdline.
-     * Zygisk loads this library in EVERY process — we only want
-     * to install hooks when the process is Telegram.
-     */
     char cmdline[256] = {0};
     int fd = open("/proc/self/cmdline", O_RDONLY);
-    if (fd >= 0) {
-        read(fd, cmdline, sizeof(cmdline) - 1);
-        close(fd);
-    }
+    if (fd >= 0) { read(fd, cmdline, sizeof(cmdline)-1); close(fd); }
     char *sep = strchr(cmdline, '\0');
     if (sep) *sep = '\0';
 
-    bool is_telegram = (strstr(cmdline, "org.telegram.messenger") != NULL);
-    if (!is_telegram) {
-        LOGD("Skipping — not Telegram (cmdline: %s)", cmdline[0] ? cmdline : "(zygote)");
+    if (strstr(cmdline, "org.telegram.messenger") == NULL) {
+        LOGD("Skipping (not Telegram)");
         return;
     }
 
-    LOGI("Process is Telegram (%s) — preparing hooks", cmdline);
-
-    /* Pre-load config into global state */
+    LOGI("Telegram process detected — installing hooks");
     load_config();
 
-    /* Start Unix socket server for secure WebUI communication */
-    start_socket_server();
-
-    /* Store API pointers for post_app_specialize */
-    g_api = api;
-    g_jenv = jenv;
-
-    /* Register module ABI callbacks — post_app_specialize will
-     * call register_telegram_hooks() at the right time. */
-    g_abi.pre_app_specialize = my_pre_app_specialize;
-    g_abi.post_app_specialize = my_post_app_specialize;
-
-    if (!api->register_module(api, &g_abi)) {
-        LOGE("Failed to register Zygisk module");
+    if (jenv) {
+        (*jenv)->GetJavaVM(jenv, &g_jvm);
     }
 
-    LOGI("Telegram Chat Hider module initialized (hooks deferred to post_app_specialize)");
+    g_abi.pre_app_specialize  = my_pre_app_specialize;
+    g_abi.post_app_specialize = my_post_app_specialize;
+    if (!api->register_module(api, &g_abi))
+        LOGE("Failed to register Zygisk module");
+
+    LOGI("Module initialized (hooks on post_app_specialize)");
 }
