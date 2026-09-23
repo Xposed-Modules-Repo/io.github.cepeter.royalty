@@ -65,7 +65,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Removing all previous GitHub releases for this repo…"
-          gh release list --limit 100 --json tagName,url \
+          gh release list --limit 100 --json tagName \
             | jq -r '.[].tagName' \
             | while read -r tag; do
                 echo "  Deleting release for tag: $tag"
