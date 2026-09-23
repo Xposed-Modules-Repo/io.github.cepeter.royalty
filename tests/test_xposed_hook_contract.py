@@ -1,0 +1,47 @@
+import pathlib
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+HOOK = ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/TelegramHook.java"
+
+
+class XposedHookContractTests(unittest.TestCase):
+    def setUp(self):
+        self.source = HOOK.read_text()
+
+    def test_only_official_telegram_main_process_is_hooked(self):
+        self.assertIn('"org.telegram.messenger".equals(lpparam.packageName)', self.source)
+        self.assertIn("lpparam.packageName.equals(lpparam.processName)", self.source)
+
+    def test_dialog_hook_returns_copy_and_notification_hook_replaces_argument(self):
+        self.assertIn('"getDialogs"', self.source)
+        self.assertIn("param.setResult(filtered)", self.source)
+        self.assertIn('"processNewMessages"', self.source)
+        self.assertIn("param.args[0] = filtered", self.source)
+        self.assertNotIn(".remove(", self.source)
+
+    def test_reveal_hooks_only_telegram_action_bar(self):
+        self.assertIn('"org.telegram.ui.ActionBar.ActionBar"', self.source)
+        self.assertIn('"dispatchTouchEvent"', self.source)
+        self.assertIn('"org.telegram.ui.DialogsActivity"', self.source)
+        self.assertNotIn('"android.view.View"', self.source)
+
+    def test_xposed_preferences_reload_and_catalog_uses_explicit_service(self):
+        repository = (ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/XposedConfigRepository.java").read_text()
+        publisher = (ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/CatalogPublisher.java").read_text()
+        self.assertIn("new XSharedPreferences", repository)
+        self.assertIn("preferences.reload()", repository)
+        self.assertIn("new ComponentName", publisher)
+        self.assertIn("BuildConfig.APPLICATION_ID", publisher)
+        self.assertIn("Context.BIND_AUTO_CREATE", publisher)
+
+    def test_each_hook_reports_install_status(self):
+        self.assertIn('install("dialogs"', self.source)
+        self.assertIn('install("notifications"', self.source)
+        self.assertIn('install("reveal"', self.source)
+        self.assertIn('reportStatus(hook, "installed"', self.source)
+        self.assertIn('reportStatus(hook, "missing"', self.source)
+
+
+if __name__ == "__main__":
+    unittest.main()
