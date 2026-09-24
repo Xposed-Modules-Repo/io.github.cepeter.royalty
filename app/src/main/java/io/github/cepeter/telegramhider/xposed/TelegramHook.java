@@ -24,12 +24,11 @@ public final class TelegramHook implements IXposedHookLoadPackage {
     private static final long CATALOG_PUBLISH_INTERVAL_MS = 3000;
 
     private static final XposedConfigRepository CONFIG = new XposedConfigRepository();
+    private static final CatalogSnapshotStore CATALOGS = new CatalogSnapshotStore();
     private static final AtomicBoolean REVEALED = new AtomicBoolean(false);
     private static final TapSequence TAP_SEQUENCE = new TapSequence(5, 800);
-    private static final Map<String, HookStatus> HOOK_STATUS = new LinkedHashMap<>();
     private static final Map<Integer, Long> LAST_CATALOG_PUBLISH = new LinkedHashMap<>();
 
-    private static volatile CatalogPublisher publisher;
     private static ClassLoader telegramClassLoader;
 
     @Override
@@ -55,8 +54,8 @@ public final class TelegramHook implements IXposedHookLoadPackage {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         try {
-                            publisher = new CatalogPublisher((Context) param.thisObject);
-                            flushStatus();
+                            CatalogRequestBridge.register(
+                                    (Context) param.thisObject, CATALOGS);
                         } catch (RuntimeException error) {
                             XposedBridge.log("TelegramChatHider: bridge startup failed: " + error);
                         }
@@ -183,11 +182,6 @@ public final class TelegramHook implements IXposedHookLoadPackage {
 
     private static void publishCatalogIfDue(
             int account, Object messagesController, List<Object> dialogs) {
-        CatalogPublisher currentPublisher = publisher;
-        if (currentPublisher == null) {
-            return;
-        }
-
         long now = android.os.SystemClock.elapsedRealtime();
         synchronized (LAST_CATALOG_PUBLISH) {
             Long last = LAST_CATALOG_PUBLISH.get(account);
@@ -219,7 +213,7 @@ public final class TelegramHook implements IXposedHookLoadPackage {
             ids = java.util.Arrays.copyOf(ids, added);
             titles = java.util.Arrays.copyOf(titles, added);
         }
-        currentPublisher.submit(account, ids, titles);
+        CATALOGS.replaceAccount(account, ids, titles);
     }
 
     private static String resolveDialogTitle(Object messagesController, long dialogId) {
@@ -298,40 +292,10 @@ public final class TelegramHook implements IXposedHookLoadPackage {
     }
 
     private static void reportStatus(String hook, String status, String detail) {
-        synchronized (HOOK_STATUS) {
-            HOOK_STATUS.put(hook, new HookStatus(hook, status, detail));
-        }
-        CatalogPublisher currentPublisher = publisher;
-        if (currentPublisher != null) {
-            currentPublisher.reportStatus(hook, status, detail);
-        }
-    }
-
-    private static void flushStatus() {
-        CatalogPublisher currentPublisher = publisher;
-        if (currentPublisher == null) {
-            return;
-        }
-        synchronized (HOOK_STATUS) {
-            for (HookStatus status : HOOK_STATUS.values()) {
-                currentPublisher.reportStatus(status.hook, status.status, status.detail);
-            }
-        }
+        CATALOGS.recordStatus(hook, status, detail);
     }
 
     private interface HookInstaller {
         void install() throws Throwable;
-    }
-
-    private static final class HookStatus {
-        final String hook;
-        final String status;
-        final String detail;
-
-        HookStatus(String hook, String status, String detail) {
-            this.hook = hook;
-            this.status = status;
-            this.detail = detail;
-        }
     }
 }

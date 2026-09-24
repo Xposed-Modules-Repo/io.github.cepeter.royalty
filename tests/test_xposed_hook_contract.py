@@ -27,14 +27,14 @@ class XposedHookContractTests(unittest.TestCase):
         self.assertIn('"org.telegram.ui.DialogsActivity"', self.source)
         self.assertNotIn('"android.view.View"', self.source)
 
-    def test_xposed_preferences_reload_and_catalog_uses_explicit_service(self):
+    def test_xposed_preferences_reload_and_catalog_uses_callback_bridge(self):
         repository = (ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/XposedConfigRepository.java").read_text()
-        publisher = (ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/CatalogPublisher.java").read_text()
+        bridge = (ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/CatalogRequestBridge.java").read_text()
         self.assertIn("new XSharedPreferences", repository)
         self.assertIn("preferences.reload()", repository)
-        self.assertIn("new ComponentName", publisher)
-        self.assertIn("BuildConfig.APPLICATION_ID", publisher)
-        self.assertIn("Context.BIND_AUTO_CREATE", publisher)
+        self.assertIn("CatalogRequestBridge.register", self.source)
+        self.assertIn("CatalogProtocol.ACTION_REQUEST", bridge)
+        self.assertNotIn("bindService", bridge)
         self.assertIn("CatalogSubmission.MAX_ENTRIES", self.source)
 
     def test_catalog_binding_releases_dead_registrations(self):
