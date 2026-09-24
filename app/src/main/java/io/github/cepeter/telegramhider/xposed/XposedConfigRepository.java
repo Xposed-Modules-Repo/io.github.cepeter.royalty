@@ -33,7 +33,7 @@ public final class XposedConfigRepository {
         Set<String> snapshot = stored == null ? Collections.emptySet() : new HashSet<>(stored);
         cached = HiddenConfig.fromStrings(
                 snapshot,
-                preferences.getBoolean(ConfigStore.SUPPRESS_NOTIFICATIONS, true));
+                preferences.getBoolean(ConfigStore.SUPPRESS_NOTIFICATIONS, false));
         nextReloadAt = now + RELOAD_INTERVAL_MS;
         return cached;
     }

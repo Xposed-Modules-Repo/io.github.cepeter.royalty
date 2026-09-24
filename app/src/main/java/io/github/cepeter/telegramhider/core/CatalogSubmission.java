@@ -6,8 +6,8 @@ import java.util.List;
 import java.util.Map;
 
 public final class CatalogSubmission {
-    public static final int MAX_ENTRIES = 512;
-    public static final int MAX_TITLE_LENGTH = 128;
+    public static final int MAX_ENTRIES = 1024;
+    public static final int MAX_TITLE_LENGTH = 256;
 
     private CatalogSubmission() {}
 

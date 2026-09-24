@@ -27,7 +27,7 @@ public final class ConfigStore {
         Set<String> snapshot = stored == null ? java.util.Collections.emptySet() : new HashSet<>(stored);
         return HiddenConfig.fromStrings(
                 snapshot,
-                preferences.getBoolean(SUPPRESS_NOTIFICATIONS, true));
+                preferences.getBoolean(SUPPRESS_NOTIFICATIONS, false));
     }
 
     public static boolean save(

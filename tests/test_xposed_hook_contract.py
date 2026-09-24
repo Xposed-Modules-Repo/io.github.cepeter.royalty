@@ -22,7 +22,8 @@ class XposedHookContractTests(unittest.TestCase):
 
     def test_reveal_hooks_only_telegram_action_bar(self):
         self.assertIn('"org.telegram.ui.ActionBar.ActionBar"', self.source)
-        self.assertIn('"dispatchTouchEvent"', self.source)
+        self.assertIn('"onInterceptTouchEvent"', self.source)
+        self.assertNotIn('"dispatchTouchEvent"', self.source)
         self.assertIn('"org.telegram.ui.DialogsActivity"', self.source)
         self.assertNotIn('"android.view.View"', self.source)
 
@@ -34,6 +35,12 @@ class XposedHookContractTests(unittest.TestCase):
         self.assertIn("new ComponentName", publisher)
         self.assertIn("BuildConfig.APPLICATION_ID", publisher)
         self.assertIn("Context.BIND_AUTO_CREATE", publisher)
+        self.assertIn("CatalogSubmission.MAX_ENTRIES", self.source)
+
+    def test_catalog_binding_releases_dead_registrations(self):
+        publisher = (ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/CatalogPublisher.java").read_text()
+        self.assertIn("releaseBindingLocked()", publisher)
+        self.assertIn("context.unbindService(connection)", publisher)
 
     def test_each_hook_reports_install_status(self):
         self.assertIn('install("dialogs"', self.source)

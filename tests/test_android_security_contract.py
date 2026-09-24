@@ -30,6 +30,12 @@ class CatalogSecurityContractTests(unittest.TestCase):
         self.assertIn("putStringSet", source)
         self.assertIn("commit()", source)
 
+    def test_notification_suppression_is_opt_in(self):
+        config_store = (ROOT / "app/src/main/java/io/github/cepeter/telegramhider/config/ConfigStore.java").read_text()
+        xposed_store = (ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/XposedConfigRepository.java").read_text()
+        self.assertIn("getBoolean(SUPPRESS_NOTIFICATIONS, false)", config_store)
+        self.assertIn("getBoolean(ConfigStore.SUPPRESS_NOTIFICATIONS, false)", xposed_store)
+
     def test_aidl_surface_is_bounded(self):
         aidl = (ROOT / "app/src/main/aidl/io/github/cepeter/telegramhider/ICatalogService.aidl").read_text()
         self.assertIn("void submit(int account, in long[] ids, in String[] titles);", aidl)

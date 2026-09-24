@@ -37,18 +37,23 @@ public final class CatalogPublisher {
         public void onServiceDisconnected(ComponentName name) {
             synchronized (CatalogPublisher.this) {
                 service = null;
-                bindRequested = false;
+                // The binding remains registered and Android reconnects it automatically.
+                bindRequested = true;
             }
         }
 
         @Override
         public void onBindingDied(ComponentName name) {
-            onServiceDisconnected(name);
+            synchronized (CatalogPublisher.this) {
+                releaseBindingLocked();
+            }
         }
 
         @Override
         public void onNullBinding(ComponentName name) {
-            onServiceDisconnected(name);
+            synchronized (CatalogPublisher.this) {
+                releaseBindingLocked();
+            }
         }
     };
 
@@ -88,6 +93,20 @@ public final class CatalogPublisher {
         }
     }
 
+    private void releaseBindingLocked() {
+        service = null;
+        if (!bindRequested) {
+            return;
+        }
+        try {
+            context.unbindService(connection);
+        } catch (RuntimeException error) {
+            XposedBridge.log("TelegramChatHider: catalog service unbind failed: " + error);
+        } finally {
+            bindRequested = false;
+        }
+    }
+
     private void flushLocked() {
         if (service == null) {
             return;
@@ -102,8 +121,7 @@ public final class CatalogPublisher {
             }
             pendingStatuses.clear();
         } catch (RemoteException | RuntimeException error) {
-            service = null;
-            bindRequested = false;
+            releaseBindingLocked();
             XposedBridge.log("TelegramChatHider: catalog service call failed: " + error);
         }
     }

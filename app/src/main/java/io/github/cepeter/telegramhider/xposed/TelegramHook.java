@@ -8,6 +8,7 @@ import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import io.github.cepeter.telegramhider.core.CatalogSubmission;
 import io.github.cepeter.telegramhider.core.DialogFilter;
 import io.github.cepeter.telegramhider.core.DialogKey;
 import io.github.cepeter.telegramhider.core.HiddenConfig;
@@ -21,7 +22,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class TelegramHook implements IXposedHookLoadPackage {
     private static final long CATALOG_PUBLISH_INTERVAL_MS = 3000;
-    private static final int MAX_CATALOG_ENTRIES = 512;
 
     private static final XposedConfigRepository CONFIG = new XposedConfigRepository();
     private static final AtomicBoolean REVEALED = new AtomicBoolean(false);
@@ -144,7 +144,7 @@ public final class TelegramHook implements IXposedHookLoadPackage {
         XposedHelpers.findAndHookMethod(
                 "org.telegram.ui.ActionBar.ActionBar",
                 classLoader,
-                "dispatchTouchEvent",
+                "onInterceptTouchEvent",
                 MotionEvent.class,
                 new XC_MethodHook() {
                     @Override
@@ -197,7 +197,7 @@ public final class TelegramHook implements IXposedHookLoadPackage {
             LAST_CATALOG_PUBLISH.put(account, now);
         }
 
-        int count = Math.min(dialogs.size(), MAX_CATALOG_ENTRIES);
+        int count = Math.min(dialogs.size(), CatalogSubmission.MAX_ENTRIES);
         long[] ids = new long[count];
         String[] titles = new String[count];
         int added = 0;

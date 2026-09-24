@@ -22,6 +22,12 @@ public final class CatalogSubmissionTest {
     }
 
     @Test
+    public void usesArchitectureCatalogBounds() {
+        assertEquals(1024, CatalogSubmission.MAX_ENTRIES);
+        assertEquals(256, CatalogSubmission.MAX_TITLE_LENGTH);
+    }
+
+    @Test
     public void capsCatalogAndTitleLength() {
         long[] ids = new long[CatalogSubmission.MAX_ENTRIES + 50];
         String[] titles = new String[ids.length];
