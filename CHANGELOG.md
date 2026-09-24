@@ -24,6 +24,7 @@ All notable changes are documented here. The project follows [Keep a Changelog](
 - Supported surfaces are now documented accurately: dialog lists and new-message notifications only.
 - Notification suppression is opt-in; catalog responses follow the documented 1,024-entry and 256-code-unit bounds.
 - The configuration app is labeled `Royalty`.
+- Royalty now uses a responsive card-based dashboard with light/dark palettes, modern dialog rows, accessible controls, and system-bar insets.
 - The reveal gesture uses a three-second ActionBar press-and-hold through `dispatchTouchEvent`, so story-header children cannot consume it before the hook.
 - The reveal gesture supports Telegram 12.8.3’s APK-verified obfuscated `ActionBar` and `DialogsActivity` aliases and verifies the active fragment through `ActionBarLayout`.
 - Telegram hook classes are resolved only after `ApplicationLoader.onCreate`, preventing early static initialization from crashing Telegram under Vector.

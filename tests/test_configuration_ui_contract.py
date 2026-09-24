@@ -28,6 +28,20 @@ class ConfigurationUiContractTests(unittest.TestCase):
         self.assertIn("Search, share picker, and new-group screens are not hidden", strings)
         self.assertIn("Open Telegram", strings)
 
+    def test_modern_dashboard_uses_themed_cards_and_accessible_controls(self):
+        strings = (ROOT / "app/src/main/res/values/strings.xml").read_text()
+        colors = (ROOT / "app/src/main/res/values/colors.xml").read_text()
+        night_colors = (ROOT / "app/src/main/res/values-night/colors.xml").read_text()
+
+        self.assertIn("createCard", self.source)
+        self.assertIn("createPrimaryButton", self.source)
+        self.assertIn("setMinimumHeight(dp(48))", self.source)
+        self.assertIn("R.color.royalty_background", self.source)
+        self.assertIn("Private Telegram controls", strings)
+        self.assertIn("Hidden chats", strings)
+        self.assertIn("royalty_background", colors)
+        self.assertIn("royalty_background", night_colors)
+
     def test_refresh_requests_catalog_and_observes_completion(self):
         self.assertIn("CatalogRequestClient.request(this)", self.source)
         self.assertIn("CatalogProtocol.ACTION_UPDATED", self.source)
