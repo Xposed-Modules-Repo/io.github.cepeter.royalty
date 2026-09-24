@@ -12,7 +12,7 @@ import io.github.cepeter.telegramhider.core.CatalogSubmission;
 import io.github.cepeter.telegramhider.core.DialogFilter;
 import io.github.cepeter.telegramhider.core.DialogKey;
 import io.github.cepeter.telegramhider.core.HiddenConfig;
-import io.github.cepeter.telegramhider.core.TapSequence;
+import io.github.cepeter.telegramhider.core.PressAndHoldGesture;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,7 +37,7 @@ public final class TelegramHook implements IXposedHookLoadPackage {
     private static final CatalogSnapshotStore CATALOGS = new CatalogSnapshotStore();
     private static final AtomicBoolean REVEALED = new AtomicBoolean(false);
     private static final AtomicBoolean RUNTIME_HOOKS_INSTALLED = new AtomicBoolean(false);
-    private static final TapSequence TAP_SEQUENCE = new TapSequence(5, 800);
+    private static final PressAndHoldGesture REVEAL_GESTURE = new PressAndHoldGesture(3000);
     private static final Map<Integer, Long> LAST_CATALOG_PUBLISH = new LinkedHashMap<>();
 
     private static ClassLoader telegramClassLoader;
@@ -161,19 +161,40 @@ public final class TelegramHook implements IXposedHookLoadPackage {
         Class<?> actionBarClass = resolveActionBarClass(classLoader);
         XposedHelpers.findAndHookMethod(
                 actionBarClass,
-                "onInterceptTouchEvent",
+                "dispatchTouchEvent",
                 MotionEvent.class,
                 new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         MotionEvent event = (MotionEvent) param.args[0];
-                        if (event == null || event.getActionMasked() != MotionEvent.ACTION_DOWN) {
+                        if (event == null) {
+                            REVEAL_GESTURE.cancel();
                             return;
                         }
 
+                        int action = event.getActionMasked();
                         try {
+                            if (action == MotionEvent.ACTION_DOWN) {
+                                Object fragment = findDialogsFragment(
+                                        param.thisObject, classLoader);
+                                if (fragment == null) {
+                                    REVEAL_GESTURE.cancel();
+                                    return;
+                                }
+                                REVEAL_GESTURE.onDown(event.getEventTime());
+                                return;
+                            }
+                            if (action == MotionEvent.ACTION_CANCEL) {
+                                REVEAL_GESTURE.cancel();
+                                return;
+                            }
+                            if (action != MotionEvent.ACTION_UP) {
+                                return;
+                            }
+
                             Object fragment = findDialogsFragment(param.thisObject, classLoader);
-                            if (fragment == null || !TAP_SEQUENCE.record(event.getDownTime())) {
+                            if (fragment == null
+                                    || !REVEAL_GESTURE.onUp(event.getEventTime())) {
                                 return;
                             }
 
@@ -188,6 +209,7 @@ public final class TelegramHook implements IXposedHookLoadPackage {
                                     .show();
                             requestDialogsReload(fragment);
                         } catch (Throwable error) {
+                            REVEAL_GESTURE.cancel();
                             reportRuntimeError("reveal", error);
                         }
                     }
@@ -199,7 +221,7 @@ public final class TelegramHook implements IXposedHookLoadPackage {
             try {
                 Class<?> candidate = XposedHelpers.findClass(className, classLoader);
                 if (android.view.View.class.isAssignableFrom(candidate)
-                        && declaresInterceptTouchEvent(candidate)) {
+                        && declaresDispatchTouchEvent(candidate)) {
                     return candidate;
                 }
             } catch (XposedHelpers.ClassNotFoundError ignored) {
@@ -222,12 +244,12 @@ public final class TelegramHook implements IXposedHookLoadPackage {
         throw new IllegalStateException("Supported DialogsActivity class not found");
     }
 
-    private static boolean declaresInterceptTouchEvent(Class<?> candidate) {
+    private static boolean declaresDispatchTouchEvent(Class<?> candidate) {
         for (Class<?> type = candidate;
                 type != null && android.view.View.class.isAssignableFrom(type);
                 type = type.getSuperclass()) {
             try {
-                type.getDeclaredMethod("onInterceptTouchEvent", MotionEvent.class);
+                type.getDeclaredMethod("dispatchTouchEvent", MotionEvent.class);
                 return true;
             } catch (NoSuchMethodException ignored) {
                 // Continue through Telegram's view hierarchy.

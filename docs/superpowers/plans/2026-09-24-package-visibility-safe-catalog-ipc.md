@@ -42,16 +42,16 @@
 - Test: `tests/test_xposed_hook_contract.py`
 
 **Interfaces:**
-- Consumes: `CatalogSubmission.MAX_ENTRIES`, `TapSequence.record(long)`.
-- Produces: a Telegram 12.8.3-compatible `ActionBar.onInterceptTouchEvent(MotionEvent)` hook and one canonical catalog limit.
+- Consumes: `CatalogSubmission.MAX_ENTRIES`, `PressAndHoldGesture`.
+- Produces: a Telegram 12.8.3-compatible `ActionBar.dispatchTouchEvent(MotionEvent)` hook and one canonical catalog limit.
 
 - [ ] **Step 1: Verify the failing runtime contracts are represented**
 
 Confirm the tests require:
 
 ```python
-self.assertIn('"onInterceptTouchEvent"', hook_source)
-self.assertNotIn('"dispatchTouchEvent"', hook_source)
+self.assertIn('"dispatchTouchEvent"', hook_source)
+self.assertNotIn('"onInterceptTouchEvent"', hook_source)
 self.assertIn("CatalogSubmission.MAX_ENTRIES", hook_source)
 ```
 
@@ -347,7 +347,7 @@ Remove the three obsolete files and remove `buildFeatures.aidl = true` from Grad
 
 - [ ] **Step 4: Update documentation**
 
-Document reverse request/callback IPC, package-visibility compatibility, nonce validation, bounded responses, and the requirement that Telegram be running for Refresh. Record the runtime-discovered `onInterceptTouchEvent` compatibility fix.
+Document reverse request/callback IPC, package-visibility compatibility, nonce validation, bounded responses, and the requirement that Telegram be running for Refresh. Record the APK-verified `dispatchTouchEvent` three-second press-and-hold compatibility fix.
 
 - [ ] **Step 5: Run contracts and commit**
 
@@ -406,7 +406,7 @@ Verify:
 1. catalog refresh works with no HMA/package-visibility exception;
 2. main, archive, and custom folders hide selected dialogs;
 3. hidden notifications are suppressed while visible notifications remain;
-4. five ActionBar taps reveal and five taps conceal;
+4. a three-second ActionBar hold reveals and another hold conceals;
 5. two Telegram accounts use distinct keys;
 6. restart resets reveal to concealed;
 7. disabling module scope restores normal Telegram behavior.

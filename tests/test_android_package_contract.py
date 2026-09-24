@@ -17,6 +17,10 @@ class AndroidPackageContractTests(unittest.TestCase):
         self.assertIn('versionName = "2.0.0"', app_gradle)
         self.assertIn("versionCode = 7", app_gradle)
 
+    def test_app_label_is_royalty(self):
+        strings = (ROOT / "app/src/main/res/values/strings.xml").read_text()
+        self.assertIn('<string name="app_name">Royalty</string>', strings)
+
     def test_xposed_api_is_compile_only(self):
         app_gradle = (ROOT / "app/build.gradle.kts").read_text()
         self.assertIn('compileOnly("de.robv.android.xposed:api:82")', app_gradle)

@@ -26,9 +26,9 @@ class XposedHookContractTests(unittest.TestCase):
         self.assertIn('"org.telegram.ui.ActionBar.ActionBarLayout"', self.source)
         self.assertIn('"getLastFragment"', self.source)
         self.assertIn('"getActionBar"', self.source)
-        self.assertIn('"onInterceptTouchEvent"', self.source)
-        self.assertNotIn('getObjectField(\n                                    param.thisObject, "parentFragment")', self.source)
-        self.assertNotIn('"dispatchTouchEvent"', self.source)
+        self.assertIn('"dispatchTouchEvent"', self.source)
+        self.assertIn("new PressAndHoldGesture(3000)", self.source)
+        self.assertNotIn('"onInterceptTouchEvent"', self.source)
         self.assertNotIn('"android.view.View"', self.source)
 
     def test_xposed_preferences_reload_and_catalog_uses_callback_bridge(self):

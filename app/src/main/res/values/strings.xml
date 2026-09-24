@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Telegram Chat Hider</string>
+    <string name="app_name">Royalty</string>
     <string name="xposed_description">Hide selected Telegram dialogs with Vector or LSPosed.</string>
     <string name="supported_scope">Main dialog list and new-message notifications are supported. Search, share picker, and new-group screens are not hidden.</string>
     <string name="hook_status">Hook status</string>

@@ -37,7 +37,7 @@ Configuration reloads within one second. Switch Telegram folders or restart Tele
 | Share/contact picker | Not supported |
 | New-group/contact invite | Not supported |
 
-Tap Telegram’s main dialog-list ActionBar five times rapidly to toggle temporary reveal mode. Reveal resets when Telegram restarts and does not disable notification suppression.
+Press and hold Telegram’s main dialog-list ActionBar for three seconds, then release, to toggle temporary reveal mode. Reveal resets when Telegram restarts and does not disable notification suppression.
 
 ## Safety model
 

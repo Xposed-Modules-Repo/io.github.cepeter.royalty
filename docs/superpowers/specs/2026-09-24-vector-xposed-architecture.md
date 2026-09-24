@@ -5,7 +5,7 @@
 
 ## Goal
 
-Replace the unsafe custom ART entry-point patcher with a maintainable Android Xposed module APK that runs on JingMatrix Vector and legacy-compatible LSPosed. The first production release hides selected dialogs from Telegram's main dialog lists, suppresses new-message notifications for those dialogs, and provides an in-app five-tap reveal gesture.
+Replace the unsafe custom ART entry-point patcher with a maintainable Android Xposed module APK that runs on JingMatrix Vector and legacy-compatible LSPosed. The first production release hides selected dialogs from Telegram's main dialog lists, suppresses new-message notifications for those dialogs, and provides an in-app three-second press-and-hold reveal gesture.
 
 ## Supported environment
 
@@ -49,12 +49,11 @@ Before `NotificationsController.processNewMessages(ArrayList, boolean, boolean, 
 
 ### Reveal gesture
 
-Resolve Telegram's source-build class names or the APK-verified 12.8.3 aliases for `ActionBar` and `DialogsActivity`, then hook `onInterceptTouchEvent(MotionEvent)`:
+Resolve Telegram's source-build class names or the APK-verified 12.8.3 aliases for `ActionBar` and `DialogsActivity`, then hook `dispatchTouchEvent(MotionEvent)`:
 
 - verify that the touched ActionBar belongs to the active `DialogsActivity` through `LaunchActivity`'s `ActionBarLayout`, without depending on private field names;
-- accept `ACTION_DOWN` only;
+- start timing on `ACTION_DOWN`, cancel on `ACTION_CANCEL`, and toggle after `ACTION_UP` at least three seconds later;
 - require the discovered owning fragment instance to be `DialogsActivity`;
-- count five taps within a bounded interval;
 - toggle process-memory reveal state;
 - show a Toast and post Telegram's `dialogsNeedReload` event.
 
