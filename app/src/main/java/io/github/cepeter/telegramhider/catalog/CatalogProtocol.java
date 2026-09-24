@@ -20,6 +20,7 @@ public final class CatalogProtocol {
     public static final String TYPE_COMPLETE = "complete";
     public static final int MAX_STATUS_NAME_LENGTH = 32;
     public static final int MAX_STATUS_DETAIL_LENGTH = 256;
+    public static final int MAX_STATUS_COUNT = 16;
     public static final long NONCE_LIFETIME_MS = 15_000L;
 
     private CatalogProtocol() {}

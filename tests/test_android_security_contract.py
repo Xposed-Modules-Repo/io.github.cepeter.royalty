@@ -7,22 +7,19 @@ ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 
 
 class CatalogSecurityContractTests(unittest.TestCase):
-    def test_exported_service_authenticates_binder_uid(self):
+    def test_catalog_callback_receiver_is_not_exported(self):
         manifest = ET.parse(ROOT / "app/src/main/AndroidManifest.xml").getroot()
         application = manifest.find("application")
         if application is None:
             self.fail("application missing")
-        service = next(
+        receivers = application.findall("receiver")
+        receiver = next(
             node
-            for node in application.findall("service")
-            if node.attrib.get(ANDROID_NS + "name") == ".catalog.CatalogService"
+            for node in receivers
+            if node.attrib.get(ANDROID_NS + "name") == ".catalog.CatalogResultReceiver"
         )
-        self.assertEqual("true", service.attrib[ANDROID_NS + "exported"])
-
-        source = (ROOT / "app/src/main/java/io/github/cepeter/telegramhider/catalog/CatalogService.java").read_text()
-        self.assertIn("Binder.getCallingUid()", source)
-        self.assertIn('"org.telegram.messenger"', source)
-        self.assertIn("SecurityException", source)
+        self.assertEqual("false", receiver.attrib[ANDROID_NS + "exported"])
+        self.assertFalse(application.findall("service"))
 
     def test_config_uses_framework_redirected_shared_preferences(self):
         source = (ROOT / "app/src/main/java/io/github/cepeter/telegramhider/config/ConfigStore.java").read_text()

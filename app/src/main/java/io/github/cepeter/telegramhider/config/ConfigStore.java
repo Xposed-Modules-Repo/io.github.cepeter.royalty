@@ -30,6 +30,7 @@ public final class ConfigStore {
                 preferences.getBoolean(SUPPRESS_NOTIFICATIONS, false));
     }
 
+    @SuppressLint("ApplySharedPref")
     public static boolean save(
             Context context, Set<DialogKey> hiddenDialogs, boolean suppressNotifications) {
         Set<String> encoded = new HashSet<>();

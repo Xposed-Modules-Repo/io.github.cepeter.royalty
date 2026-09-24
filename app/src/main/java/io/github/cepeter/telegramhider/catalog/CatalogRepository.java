@@ -1,5 +1,6 @@
 package io.github.cepeter.telegramhider.catalog;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.SharedPreferences;
 import io.github.cepeter.telegramhider.core.CatalogEntry;
@@ -21,6 +22,7 @@ public final class CatalogRepository {
         preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE);
     }
 
+    @SuppressLint("ApplySharedPref")
     public boolean replaceAccount(int account, long[] ids, String[] titles) {
         List<CatalogEntry> entries = CatalogSubmission.sanitize(account, ids, titles);
         String accountPrefix = DIALOG_PREFIX + account + ":";
@@ -37,6 +39,7 @@ public final class CatalogRepository {
         return editor.commit();
     }
 
+    @SuppressLint("ApplySharedPref")
     public boolean recordStatus(String hook, String status, String detail) {
         return preferences.edit()
                 .putString(STATUS_PREFIX + hook, status)

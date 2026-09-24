@@ -1,5 +1,6 @@
 package io.github.cepeter.telegramhider.xposed;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
@@ -32,6 +33,7 @@ public final class CatalogRequestBridge {
     }
 
     @SuppressWarnings("deprecation")
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private static void registerLegacy(
             Context context, BroadcastReceiver receiver, IntentFilter filter) {
         context.registerReceiver(receiver, filter);

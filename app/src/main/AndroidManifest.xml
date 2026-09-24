@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <queries>
         <package android:name="org.telegram.messenger" />
     </queries>
@@ -23,12 +22,9 @@
             </intent-filter>
         </activity>
 
-        <!-- Binder methods verify that the caller UID owns the official Telegram package. -->
-        <service
-            android:name=".catalog.CatalogService"
-            android:exported="true"
-            android:stopWithTask="false"
-            tools:ignore="ExportedService" />
+        <receiver
+            android:name=".catalog.CatalogResultReceiver"
+            android:exported="false" />
 
         <meta-data android:name="xposedmodule" android:value="true" />
         <meta-data android:name="xposeddescription" android:value="@string/xposed_description" />
