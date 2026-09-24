@@ -14,16 +14,14 @@
 - Vector 2.x or compatible LSPosed
 - Official Telegram **12.8.3**, package `org.telegram.messenger`
 
-APatch and MeowZygisk are no longer direct dependencies. Do not install the old APatch ZIP beside version 2.
-
 ## Install
 
 1. Install the Royalty release APK.
 2. Enable **Royalty** in Vector or LSPosed.
 3. Scope it to `org.telegram.messenger`.
-4. Force-stop Telegram and the module app, then reopen Telegram.
+4. Restart the device so Vector or LSPosed can activate the module in Telegram.
 5. Open Telegram and leave its main process running so it can prepare the bounded catalog snapshot.
-6. Open the module app, tap Refresh, select dialogs, optionally enable notification suppression, and save.
+6. Open Royalty, tap Refresh, select dialogs, optionally enable notification suppression, and save.
 
 Notification suppression is off by default.
 
