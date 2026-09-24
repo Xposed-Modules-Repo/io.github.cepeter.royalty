@@ -1,23 +1,25 @@
-# Telegram Chat Hider
+# Royalty – Telegram Chat Hiding
 
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+![Tested Telegram: 12.8.3](https://img.shields.io/badge/Telegram-12.8.3-26A5E4.svg)
 
-An Android Xposed module that hides selected dialogs from Telegram’s main dialog lists and suppresses their new-message notifications.
+**Royalty** is an Android Xposed module that hides selected dialogs from Telegram’s main dialog lists and suppresses their new-message notifications.
 
 > Version 2.0 replaces the unsupported native APatch implementation. It requires [Vector](https://github.com/JingMatrix/Vector) or a compatible LSPosed installation.
+> The current hook mappings are tested against official Telegram **12.8.3** (`org.telegram.messenger`). Other Telegram versions are not guaranteed to work.
 
 ## Requirements
 
 - Android 8.1 or newer
 - Vector 2.x or compatible LSPosed
-- Official Telegram package `org.telegram.messenger`
+- Official Telegram **12.8.3**, package `org.telegram.messenger`
 
 APatch and MeowZygisk are no longer direct dependencies. Do not install the old APatch ZIP beside version 2.
 
 ## Install
 
-1. Install the release APK.
-2. Enable **Telegram Chat Hider** in Vector or LSPosed.
+1. Install the Royalty release APK.
+2. Enable **Royalty** in Vector or LSPosed.
 3. Scope it to `org.telegram.messenger`.
 4. Force-stop Telegram and the module app, then reopen Telegram.
 5. Open Telegram and leave its main process running so it can prepare the bounded catalog snapshot.
