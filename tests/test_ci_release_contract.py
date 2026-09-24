@@ -21,6 +21,10 @@ class CiReleaseContractTests(unittest.TestCase):
         for sha in shas:
             self.assertIn(sha, self.workflow)
 
+    def test_android_setup_does_not_request_removed_tools_package(self):
+        self.assertIn("packages: platform-tools", self.workflow)
+        self.assertNotIn("packages: tools", self.workflow)
+
     def test_ci_runs_all_gates(self):
         for gate in ("unittest discover", "testDebugUnitTest", "lintDebug", "assembleDebug", "assembleRelease"):
             self.assertIn(gate, self.workflow)
