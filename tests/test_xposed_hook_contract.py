@@ -20,11 +20,14 @@ class XposedHookContractTests(unittest.TestCase):
         self.assertIn("param.args[0] = filtered", self.source)
         self.assertNotIn(".remove(", self.source)
 
-    def test_reveal_hooks_only_telegram_action_bar(self):
-        self.assertIn('"org.telegram.ui.ActionBar.ActionBar"', self.source)
+    def test_reveal_discovers_obfuscated_action_bar_from_dialogs_activity(self):
+        self.assertIn("resolveActionBarClass", self.source)
+        self.assertIn("findDialogsFragment", self.source)
         self.assertIn('"onInterceptTouchEvent"', self.source)
-        self.assertNotIn('"dispatchTouchEvent"', self.source)
         self.assertIn('"org.telegram.ui.DialogsActivity"', self.source)
+        self.assertIn("getDeclaredFields()", self.source)
+        self.assertNotIn('getObjectField(\n                                    param.thisObject, "parentFragment")', self.source)
+        self.assertNotIn('"dispatchTouchEvent"', self.source)
         self.assertNotIn('"android.view.View"', self.source)
 
     def test_xposed_preferences_reload_and_catalog_uses_callback_bridge(self):

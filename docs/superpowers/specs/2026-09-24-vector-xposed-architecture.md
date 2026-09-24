@@ -49,10 +49,11 @@ Before `NotificationsController.processNewMessages(ArrayList, boolean, boolean, 
 
 ### Reveal gesture
 
-Hook `org.telegram.ui.ActionBar.ActionBar.dispatchTouchEvent(MotionEvent)`:
+Discover Telegram's runtime ActionBar class from the `DialogsActivity` hierarchy, then hook `onInterceptTouchEvent(MotionEvent)`:
 
+- do not depend on the ActionBar class name or its fragment-field name, because official builds obfuscate both;
 - accept `ACTION_DOWN` only;
-- require `parentFragment` to be `DialogsActivity`;
+- require the discovered owning fragment instance to be `DialogsActivity`;
 - count five taps within a bounded interval;
 - toggle process-memory reveal state;
 - show a Toast and post Telegram's `dialogsNeedReload` event.

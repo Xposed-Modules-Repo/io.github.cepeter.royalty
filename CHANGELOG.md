@@ -23,7 +23,7 @@ All notable changes are documented here. The project follows [Keep a Changelog](
 - Configuration moved from a root JSON file to Vector/LSPosed XSharedPreferences safe-zone storage.
 - Supported surfaces are now documented accurately: dialog lists and new-message notifications only.
 - Notification suppression is opt-in; catalog responses follow the documented 1,024-entry and 256-code-unit bounds.
-- The reveal gesture now hooks Telegram 12.8.3’s declared `ActionBar.onInterceptTouchEvent(MotionEvent)` method.
+- The reveal gesture discovers Telegram 12.8.3’s runtime ActionBar class from `DialogsActivity` and hooks `onInterceptTouchEvent(MotionEvent)`, surviving official-build class and field obfuscation.
 - Telegram hook classes are resolved only after `ApplicationLoader.onCreate`, preventing early static initialization from crashing Telegram under Vector.
 - Catalog requests now rely on the signature-level sender permission instead of package-visibility-sensitive `PendingIntent` identity metadata.
 

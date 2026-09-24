@@ -148,9 +148,9 @@ public final class TelegramHook implements IXposedHookLoadPackage {
     }
 
     private static void installRevealHook(ClassLoader classLoader) {
+        Class<?> actionBarClass = resolveActionBarClass(classLoader);
         XposedHelpers.findAndHookMethod(
-                "org.telegram.ui.ActionBar.ActionBar",
-                classLoader,
+                actionBarClass,
                 "onInterceptTouchEvent",
                 MotionEvent.class,
                 new XC_MethodHook() {
@@ -162,12 +162,8 @@ public final class TelegramHook implements IXposedHookLoadPackage {
                         }
 
                         try {
-                            Object fragment = XposedHelpers.getObjectField(
-                                    param.thisObject, "parentFragment");
-                            if (fragment == null
-                                    || !"org.telegram.ui.DialogsActivity".equals(
-                                            fragment.getClass().getName())
-                                    || !TAP_SEQUENCE.record(event.getDownTime())) {
+                            Object fragment = findDialogsFragment(param.thisObject, classLoader);
+                            if (fragment == null || !TAP_SEQUENCE.record(event.getDownTime())) {
                                 return;
                             }
 
@@ -186,6 +182,94 @@ public final class TelegramHook implements IXposedHookLoadPackage {
                         }
                     }
                 });
+    }
+
+    private static Class<?> resolveActionBarClass(ClassLoader classLoader) {
+        try {
+            return XposedHelpers.findClass(
+                    "org.telegram.ui.ActionBar.ActionBar", classLoader);
+        } catch (XposedHelpers.ClassNotFoundError ignored) {
+            // Official Telegram builds may obfuscate this class.
+        }
+
+        Class<?> dialogsActivity = XposedHelpers.findClass(
+                "org.telegram.ui.DialogsActivity", classLoader);
+        Class<?> fallback = null;
+        boolean ambiguous = false;
+        for (Class<?> owner = dialogsActivity;
+                owner != null && owner != Object.class;
+                owner = owner.getSuperclass()) {
+            for (java.lang.reflect.Field field : owner.getDeclaredFields()) {
+                Class<?> candidate = field.getType();
+                if (!android.view.View.class.isAssignableFrom(candidate)
+                        || !declaresInterceptTouchEvent(candidate)) {
+                    continue;
+                }
+                if (referencesDialogsActivity(candidate, dialogsActivity)) {
+                    return candidate;
+                }
+                if (fallback == null) {
+                    fallback = candidate;
+                } else if (fallback != candidate) {
+                    ambiguous = true;
+                }
+            }
+        }
+        if (fallback != null && !ambiguous) {
+            return fallback;
+        }
+        throw new IllegalStateException("ActionBar class not found via DialogsActivity");
+    }
+
+    private static boolean declaresInterceptTouchEvent(Class<?> candidate) {
+        for (Class<?> type = candidate;
+                type != null && android.view.View.class.isAssignableFrom(type);
+                type = type.getSuperclass()) {
+            try {
+                type.getDeclaredMethod("onInterceptTouchEvent", MotionEvent.class);
+                return true;
+            } catch (NoSuchMethodException ignored) {
+                // Continue through Telegram's obfuscated view hierarchy.
+            }
+        }
+        return false;
+    }
+
+    private static boolean referencesDialogsActivity(
+            Class<?> candidate, Class<?> dialogsActivity) {
+        for (Class<?> type = candidate;
+                type != null && type != Object.class;
+                type = type.getSuperclass()) {
+            for (java.lang.reflect.Field field : type.getDeclaredFields()) {
+                Class<?> fieldType = field.getType();
+                if (fieldType != Object.class && fieldType.isAssignableFrom(dialogsActivity)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static Object findDialogsFragment(Object actionBar, ClassLoader classLoader)
+            throws IllegalAccessException {
+        Class<?> dialogsActivity = XposedHelpers.findClass(
+                "org.telegram.ui.DialogsActivity", classLoader);
+        for (Class<?> type = actionBar.getClass();
+                type != null && type != Object.class;
+                type = type.getSuperclass()) {
+            for (java.lang.reflect.Field field : type.getDeclaredFields()) {
+                Class<?> fieldType = field.getType();
+                if (fieldType == Object.class || !fieldType.isAssignableFrom(dialogsActivity)) {
+                    continue;
+                }
+                field.setAccessible(true);
+                Object value = field.get(actionBar);
+                if (dialogsActivity.isInstance(value)) {
+                    return value;
+                }
+            }
+        }
+        return null;
     }
 
     private static void publishCatalogIfDue(
