@@ -69,7 +69,7 @@ Telegram keeps only the latest catalog per account and latest status per hook. P
 
 ## Reveal compatibility fix
 
-Telegram 12.8.3 declares `ActionBar.onInterceptTouchEvent(MotionEvent)` and `onTouchEvent(MotionEvent)`, but the official build obfuscates the ActionBar class and its fragment field. The reveal hook discovers the runtime ActionBar type from the `DialogsActivity` hierarchy, hooks `onInterceptTouchEvent`, observes `ACTION_DOWN` without changing the method result, verifies the owning fragment instance is `DialogsActivity`, and reuses the existing five-tap state machine.
+Telegram 12.8.3 declares `ActionBar.onInterceptTouchEvent(MotionEvent)` and `onTouchEvent(MotionEvent)`, but the official build obfuscates the ActionBar and DialogsActivity class names. The reveal hook supports source-build names plus aliases verified directly from the installed 12.8.3 APK, hooks `onInterceptTouchEvent`, observes `ACTION_DOWN` without changing the method result, verifies the active fragment through `LaunchActivity`'s `ActionBarLayout`, and reuses the existing five-tap state machine.
 
 ## Removal and migration
 

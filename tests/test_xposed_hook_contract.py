@@ -20,12 +20,13 @@ class XposedHookContractTests(unittest.TestCase):
         self.assertIn("param.args[0] = filtered", self.source)
         self.assertNotIn(".remove(", self.source)
 
-    def test_reveal_discovers_obfuscated_action_bar_from_dialogs_activity(self):
-        self.assertIn("resolveActionBarClass", self.source)
-        self.assertIn("findDialogsFragment", self.source)
+    def test_reveal_supports_verified_telegram_12_8_3_obfuscated_types(self):
+        self.assertIn('"org.telegram.ui.ActionBar.l"', self.source)
+        self.assertIn('"org.telegram.ui.iz"', self.source)
+        self.assertIn('"org.telegram.ui.ActionBar.ActionBarLayout"', self.source)
+        self.assertIn('"getLastFragment"', self.source)
+        self.assertIn('"getActionBar"', self.source)
         self.assertIn('"onInterceptTouchEvent"', self.source)
-        self.assertIn('"org.telegram.ui.DialogsActivity"', self.source)
-        self.assertIn("getDeclaredFields()", self.source)
         self.assertNotIn('getObjectField(\n                                    param.thisObject, "parentFragment")', self.source)
         self.assertNotIn('"dispatchTouchEvent"', self.source)
         self.assertNotIn('"android.view.View"', self.source)
