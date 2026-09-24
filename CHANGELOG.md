@@ -2,7 +2,7 @@
 
 All notable changes are documented here. The project follows [Keep a Changelog](https://keepachangelog.com/) and semantic versioning.
 
-## [Unreleased]
+## [2.0.0] - 2026-09-24
 
 ### Added
 
