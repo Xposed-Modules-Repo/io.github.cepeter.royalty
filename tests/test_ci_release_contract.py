@@ -34,6 +34,10 @@ class CiReleaseContractTests(unittest.TestCase):
         self.assertIn("contents: read", self.workflow)
         self.assertIn("contents: write", self.workflow)
 
+    def test_release_assets_use_royalty_brand(self):
+        self.assertIn('"release-apk/royalty-${GITHUB_REF_NAME}.apk"', self.workflow)
+        self.assertNotIn("release-apk/telegram-chat-hider-", self.workflow)
+
     def test_release_verification_checks_signature_and_contents(self):
         verification = (ROOT / "scripts/verify-release-apk.sh").read_text()
         for check in ("apksigner", "verify --verbose", "aapt", "dump badging", "assets/xposed_init", "de\\.robv\\.android\\.xposed", "sha256sum"):
