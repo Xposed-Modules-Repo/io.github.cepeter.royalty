@@ -20,8 +20,10 @@ APatch and MeowZygisk are no longer direct dependencies. Do not install the old 
 2. Enable **Telegram Chat Hider** in Vector or LSPosed.
 3. Scope it to `org.telegram.messenger`.
 4. Force-stop Telegram and the module app, then reopen Telegram.
-5. Open Telegram once so the module can collect its bounded dialog catalog.
-6. Open the module app, select dialogs, configure notification suppression, and save.
+5. Open Telegram and leave its main process running so it can prepare the bounded catalog snapshot.
+6. Open the module app, tap Refresh, select dialogs, optionally enable notification suppression, and save.
+
+Notification suppression is off by default.
 
 Configuration reloads within one second. Switch Telegram folders or restart Telegram to redraw the list.
 
@@ -43,8 +45,8 @@ Tap Telegram’s main dialog-list ActionBar five times rapidly to toggle tempora
 - `getDialogs(int)` returns a filtered copy. Telegram’s internal list is never mutated.
 - Notification filtering replaces only the incoming `processNewMessages` list and preserves countdown handling.
 - Configuration uses XSharedPreferences safe-zone redirection.
-- The exported catalog Binder service accepts calls only from the UID owning `org.telegram.messenger`.
-- Catalog submissions are bounded and contain account, dialog ID, and a display title.
+- Catalog refresh is initiated by the module app and returned through an exact-component `PendingIntent`; Telegram authenticates the callback creator, and the module accepts only active 128-bit request nonces.
+- Catalog responses contain only account, dialog ID, and a display title, with at most 1,024 entries per account and 256 UTF-16 code units per title.
 - Hook failures fail open and appear in the module app as `missing` or `runtime_error`.
 
 See [SECURITY.md](SECURITY.md) for reporting and threat-model details.
@@ -54,9 +56,10 @@ See [SECURITY.md](SECURITY.md) for reporting and threat-model details.
 Requirements: JDK 17 and Android SDK 35.
 
 ```bash
-./gradlew testDebugUnitTest assembleDebug
-./gradlew testReleaseUnitTest assembleRelease
+./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
+
+Release builds require the four `TCH_*` signing variables used by GitHub Actions. The tag workflow builds twice, compares deterministic APK payload entries, verifies the RSA-PSS-signed APK and Xposed metadata, and publishes checksum manifests.
 
 Dependencies are checksum-pinned through `gradle/verification-metadata.xml`. Xposed API 82 is compile-only and is not bundled into the APK.
 
@@ -64,8 +67,8 @@ Dependencies are checksum-pinned through `gradle/verification-metadata.xml`. Xpo
 
 ```text
 app/src/main/java/.../core/      Pure filtering and validation logic
-app/src/main/java/.../xposed/    Vector/LSPosed hooks and catalog client
-app/src/main/java/.../catalog/   UID-authenticated Binder service
+app/src/main/java/.../xposed/    Vector/LSPosed hooks and request bridge
+app/src/main/java/.../catalog/   Nonce-validated callback transport and private storage
 app/src/main/java/.../config/    Safe preference writer
 app/src/test/                    JVM contract tests
 ```

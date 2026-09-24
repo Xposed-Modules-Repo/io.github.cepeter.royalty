@@ -8,11 +8,13 @@ All notable changes are documented here. The project follows [Keep a Changelog](
 
 - Android Xposed module APK compatible with JingMatrix Vector and legacy-compatible LSPosed.
 - Account-aware dialog keys and bounded catalog collection.
-- UID-authenticated Binder service for Telegram-to-module catalog/status updates.
+- Package-visibility-safe catalog refresh using a module request and nonce-validated `PendingIntent` callback.
 - Configuration app with hook status, dialog selection, and notification controls.
 - Five-tap reveal on Telegram’s `ActionBar`.
 - Unit and packaging/security contract tests.
 - Gradle dependency verification and complete security/licensing documents.
+- SHA-pinned CI, secret-backed release signing, APK inspection, payload reproducibility checks, and Dependabot configuration.
+- Sanitized Vector device-acceptance record.
 
 ### Changed
 
@@ -20,11 +22,14 @@ All notable changes are documented here. The project follows [Keep a Changelog](
 - Notification suppression hooks `NotificationsController.processNewMessages` while preserving empty-list countdown behavior.
 - Configuration moved from a root JSON file to Vector/LSPosed XSharedPreferences safe-zone storage.
 - Supported surfaces are now documented accurately: dialog lists and new-message notifications only.
+- Notification suppression is opt-in; catalog responses follow the documented 1,024-entry and 256-code-unit bounds.
+- The reveal gesture now hooks Telegram 12.8.3’s declared `ActionBar.onInterceptTouchEvent(MotionEvent)` method.
 
 ### Removed
 
 - Custom ART entry-point offsets and Quick-ABI callbacks.
 - APatch/MeowZygisk packaging, native C library, root WebUI, and Unix catalog socket.
+- Exported Binder/AIDL catalog service that depended on Telegram being able to discover the module package.
 - Unsupported search, share-picker, and new-group claims.
 
 ### Security

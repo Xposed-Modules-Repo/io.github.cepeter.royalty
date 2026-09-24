@@ -44,9 +44,21 @@ class AndroidPackageContractTests(unittest.TestCase):
             entrypoint,
         )
 
-    def test_aidl_generation_is_enabled(self):
+    def test_aidl_and_visibility_sensitive_bridge_are_absent(self):
         app_gradle = (ROOT / "app/build.gradle.kts").read_text()
-        self.assertIn("aidl = true", app_gradle)
+        self.assertNotIn("aidl = true", app_gradle)
+        obsolete = (
+            ROOT / "app/src/main/aidl/io/github/cepeter/telegramhider/ICatalogService.aidl",
+            ROOT / "app/src/main/java/io/github/cepeter/telegramhider/catalog/CatalogService.java",
+            ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/CatalogPublisher.java",
+        )
+        for path in obsolete:
+            self.assertFalse(path.exists(), path)
+        sources = "\n".join(
+            path.read_text() for path in (ROOT / "app/src/main/java").rglob("*.java")
+        )
+        for token in ("ICatalogService", "bindService", "Binder.getCallingUid"):
+            self.assertNotIn(token, sources)
 
 
 if __name__ == "__main__":

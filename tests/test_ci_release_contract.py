@@ -24,8 +24,21 @@ class CiReleaseContractTests(unittest.TestCase):
     def test_ci_runs_all_gates(self):
         for gate in ("unittest discover", "testDebugUnitTest", "lintDebug", "assembleDebug", "assembleRelease"):
             self.assertIn(gate, self.workflow)
+        self.assertIn("scripts/verify-release-apk.sh", self.workflow)
+        self.assertIn("scripts/verify-reproducible-build.sh", self.workflow)
+        self.assertIn("environment: production", self.workflow)
         self.assertIn("contents: read", self.workflow)
         self.assertIn("contents: write", self.workflow)
+
+    def test_release_verification_checks_signature_and_contents(self):
+        verification = (ROOT / "scripts/verify-release-apk.sh").read_text()
+        for check in ("apksigner", "verify --verbose", "aapt", "dump badging", "assets/xposed_init", "de\\.robv\\.android\\.xposed", "sha256sum"):
+            self.assertIn(check, verification)
+
+    def test_dependabot_tracks_gradle_and_actions(self):
+        dependabot = (ROOT / ".github/dependabot.yml").read_text()
+        self.assertIn('package-ecosystem: "gradle"', dependabot)
+        self.assertIn('package-ecosystem: "github-actions"', dependabot)
 
     def test_release_uses_secret_backed_signing(self):
         workflow_secrets = ("TCH_KEYSTORE_B64", "TCH_STORE_PASSWORD", "TCH_KEY_ALIAS", "TCH_KEY_PASSWORD")

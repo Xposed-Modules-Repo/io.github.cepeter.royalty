@@ -1,5 +1,7 @@
 # Vector/Xposed Migration Implementation Plan
 
+> **Superseded transport note:** The Binder/AIDL catalog steps below document the first implementation. They were replaced by the package-visibility-safe callback design in `2026-09-24-package-visibility-safe-catalog-ipc.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan.
 
 **Goal:** Replace the unsafe APatch/MeowZygisk native module with a tested Android Xposed APK for Vector and LSPosed.
@@ -23,11 +25,11 @@
 - Create: `gradle/wrapper/*`
 - Remove at Task 6: native/APatch implementation files
 
-- [ ] Write package-contract tests for manifest metadata, entrypoint asset, Telegram recommended scope, min SDK, and compile-only Xposed API.
-- [ ] Run tests and confirm failure before project files exist.
-- [ ] Pin Gradle, AGP, Android SDK, JDK, and Xposed API artifact/checksum.
-- [ ] Build a minimal debug APK.
-- [ ] Inspect the APK manifest and assets.
+- [x] Write package-contract tests for manifest metadata, entrypoint asset, Telegram recommended scope, min SDK, and compile-only Xposed API.
+- [x] Run tests and confirm failure before project files exist.
+- [x] Pin Gradle, AGP, Android SDK, JDK, and Xposed API artifact/checksum.
+- [x] Build a minimal debug APK.
+- [x] Inspect the APK manifest and assets.
 
 ### Task 2: Implement and test the pure Java core
 
@@ -38,9 +40,9 @@
 - Create: `app/src/main/java/io/github/cepeter/telegramhider/core/TapSequence.java`
 - Create: corresponding tests under `app/src/test/java/...`
 
-- [ ] Write failing tests for signed ID/account parsing, immutable snapshots, list copy semantics, notification filtering, and five-tap timing/reset.
-- [ ] Implement minimal core classes without Android/Xposed dependencies.
-- [ ] Run all unit tests.
+- [x] Write failing tests for signed ID/account parsing, immutable snapshots, list copy semantics, notification filtering, and five-tap timing/reset.
+- [x] Implement minimal core classes without Android/Xposed dependencies.
+- [x] Run all unit tests.
 
 ### Task 3: Implement secure catalog Binder service
 
@@ -50,10 +52,10 @@
 - Create: `app/src/main/java/io/github/cepeter/telegramhider/catalog/CatalogStore.java`
 - Create: service tests
 
-- [ ] Write failing tests for Telegram UID authorization and all bounds.
-- [ ] Implement direct Binder caller verification on every method.
-- [ ] Persist only account, dialog ID, bounded title, and hook status in app-private storage.
-- [ ] Run service and unit tests.
+- [x] Write failing tests for Telegram UID authorization and all bounds.
+- [x] Implement direct Binder caller verification on every method.
+- [x] Persist only account, dialog ID, bounded title, and hook status in app-private storage.
+- [x] Run service and unit tests.
 
 ### Task 4: Implement resilient Vector/LSPosed hooks
 
@@ -63,13 +65,13 @@
 - Create: `app/src/main/java/io/github/cepeter/telegramhider/xposed/CatalogClient.java`
 - Create: hook adapter and contract tests
 
-- [ ] Write failing tests around hook adapter behavior using plain Java facades.
-- [ ] Install hooks only for exact package and process names.
-- [ ] Return filtered copies from `getDialogs`.
-- [ ] Replace `processNewMessages` argument with a filtered copy.
-- [ ] Implement DialogsActivity-only reveal gesture and reload notification.
-- [ ] Report install/runtime status through the service.
-- [ ] Ensure every reflection failure logs and fails open.
+- [x] Write failing tests around hook adapter behavior using plain Java facades.
+- [x] Install hooks only for exact package and process names.
+- [x] Return filtered copies from `getDialogs`.
+- [x] Replace `processNewMessages` argument with a filtered copy.
+- [x] Implement DialogsActivity-only reveal gesture and reload notification.
+- [x] Report install/runtime status through the service.
+- [x] Ensure every reflection failure logs and fails open.
 
 ### Task 5: Implement configuration Activity
 
@@ -78,11 +80,11 @@
 - Create: minimal Android resources/layouts
 - Create: UI/controller tests
 
-- [ ] Show framework and per-hook health.
-- [ ] Render catalog grouped by account with stable checked states.
-- [ ] Save canonical hidden keys and notification toggle through framework-safe SharedPreferences.
-- [ ] Display unsupported surfaces and restart/reload guidance.
-- [ ] Verify Activity lifecycle and empty/error states.
+- [x] Show framework and per-hook health.
+- [x] Render catalog grouped by account with stable checked states.
+- [x] Save canonical hidden keys and notification toggle through framework-safe SharedPreferences.
+- [x] Display unsupported surfaces and restart/reload guidance.
+- [x] Verify Activity lifecycle and empty/error states.
 
 ### Task 6: Remove unsafe implementation and update project documentation
 
@@ -92,10 +94,10 @@
 - Modify: `CHANGELOG.md`
 - Create/modify: `SECURITY.md`, `NOTICE.md`, canonical `LICENSE`
 
-- [ ] Remove all direct ART offset/Quick ABI code and APatch packaging.
-- [ ] Document Vector/LSPosed installation, scope, supported surfaces, privacy model, and troubleshooting.
-- [ ] Add migration notes and accurate third-party notices.
-- [ ] Verify repository search finds no obsolete feature claims or native hook code.
+- [x] Remove all direct ART offset/Quick ABI code and APatch packaging.
+- [x] Document Vector/LSPosed installation, scope, supported surfaces, privacy model, and troubleshooting.
+- [x] Add migration notes and accurate third-party notices.
+- [x] Verify repository search finds no obsolete feature claims or native hook code.
 
 ### Task 7: CI, release signing, and artifact verification
 
@@ -104,17 +106,17 @@
 - Create: `.github/dependabot.yml`
 - Add: release verification scripts
 
-- [ ] Pin every GitHub Action by full SHA.
-- [ ] Build/test with read-only permissions; release in a separate write-permission job.
-- [ ] Configure release signing from GitHub secrets without storing keys in the repository.
-- [ ] Verify APK signature, manifest, assets, reproducibility metadata, and absence of packaged Xposed API classes.
+- [x] Pin every GitHub Action by full SHA.
+- [x] Build/test with read-only permissions; release in a separate write-permission job.
+- [x] Configure release signing from GitHub secrets without storing keys in the repository.
+- [x] Verify APK signature, manifest, assets, reproducibility metadata, and absence of packaged Xposed API classes.
 - [ ] Push branch and require green GitHub Actions before tagging.
 
 ### Task 8: Vector device acceptance and release
 
-- [ ] Connect a Vector-enabled Android device.
+- [x] Connect a Vector-enabled Android device.
 - [ ] Execute every real-device scenario from the approved architecture spec.
-- [ ] Save versions, logs, and test results without chat-sensitive data.
+- [x] Save versions, logs, and test results without chat-sensitive data.
 - [ ] Fix any runtime incompatibilities and rerun the full matrix.
 - [ ] Tag and publish a stable GitHub release only after all scenarios pass.
 - [ ] Delete scratch build/download files and verify the remote release and asset.

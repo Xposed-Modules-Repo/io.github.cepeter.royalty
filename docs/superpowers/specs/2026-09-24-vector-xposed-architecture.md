@@ -21,7 +21,7 @@ The deliverable is a signed Android APK, not an APatch flashable ZIP. It declare
 - `assets/xposed_init` with the Java entrypoint
 - Xposed metadata with `xposedminversion > 92` and `xposedsharedprefs`
 - recommended scope `org.telegram.messenger`
-- an exported catalog Binder service whose methods verify the caller UID
+- package-visibility-safe catalog requests with a nonce-validated `PendingIntent` callback
 
 The old MeowZygisk module, C hook engine, root WebUI, Unix socket, and shell scripts are removed. Git history remains the migration record.
 
@@ -32,7 +32,7 @@ The old MeowZygisk module, C hook engine, root WebUI, Unix socket, and shell scr
 After `MessagesController.getDialogs(int)` returns:
 
 1. Read the account index from the controller's inherited `currentAccount` field.
-2. Submit a bounded catalog snapshot to the module service asynchronously.
+2. Save a bounded catalog snapshot in Telegram process memory for on-demand retrieval.
 3. If reveal mode is active, leave the result unchanged.
 4. Otherwise return a new `ArrayList` excluding configured `account:dialogId` keys.
 
@@ -69,14 +69,15 @@ The Telegram process reads the same file through `XSharedPreferences`. A throttl
 
 Hidden keys are strings in the canonical form `<account>:<signed-dialog-id>`. Account scoping prevents collisions across Telegram accounts.
 
-### Catalog service
+### Catalog callback
 
-The injected code binds explicitly to the module's `CatalogService` and submits bounded arrays of account IDs, dialog IDs, and display titles.
+Telegram keeps bounded account catalogs and hook statuses in process memory. When the module Activity resumes or Refresh is tapped, it sends a package-targeted request containing an exact-component mutable `PendingIntent` callback.
 
-Every Binder call checks `Binder.getCallingUid()` against `PackageManager.getPackagesForUid()` and rejects callers that do not own `org.telegram.messenger`. Limits:
+Telegram accepts only callbacks whose creator package is `io.github.cepeter.telegramhider`. The module receiver is not exported and accepts result frames only while their private 128-bit nonce is active. Limits:
 
-- at most 1,024 dialogs per submission;
+- at most 1,024 dialogs per account response;
 - title length at most 256 Unicode code units;
+- at most 16 bounded hook-status records;
 - no message text or usernames are transmitted;
 - catalog data remains in the module app's private storage.
 
@@ -95,7 +96,7 @@ Saving configuration reports success only when the framework-safe preference wri
 
 ## Error handling
 
-Hooks fail open: Telegram continues normally if classes, methods, fields, preferences, or IPC are unavailable. Failures are logged through `XposedBridge.log` and reported to the catalog service as one of:
+Hooks fail open: Telegram continues normally if classes, methods, fields, preferences, or IPC are unavailable. Failures are logged through `XposedBridge.log` and included in the next authenticated catalog callback as one of:
 
 - `installed`
 - `missing`
@@ -108,7 +109,7 @@ The Activity must not show a healthy status unless both required hook points rep
 - No direct ART layout assumptions or native quick-ABI callbacks.
 - No root shell execution.
 - No world-readable chat catalog.
-- Binder caller UID validation on every external service method.
+- Callback creator-package authentication, exact non-exported receiver, and expiring 128-bit request nonces.
 - Bounded arrays and strings before persistence.
 - Only IDs and titles are cataloged; no message content.
 - Release dependencies and GitHub Actions are pinned.
@@ -118,7 +119,7 @@ The Activity must not show a healthy status unless both required hook points rep
 Automated verification:
 
 - pure-Java unit tests for key parsing, list filtering, notification filtering, tap state, bounds, and immutable preference snapshots;
-- service tests for UID and input validation;
+- callback/nonce contract tests for creator authentication, expiry, bounds, and malformed input;
 - hook contract tests against pinned Telegram source signatures;
 - release APK build and package inspection;
 - no `de.robv.android.xposed` implementation classes packaged in the APK;

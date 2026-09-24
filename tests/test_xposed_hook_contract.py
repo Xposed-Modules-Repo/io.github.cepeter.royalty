@@ -37,10 +37,9 @@ class XposedHookContractTests(unittest.TestCase):
         self.assertNotIn("bindService", bridge)
         self.assertIn("CatalogSubmission.MAX_ENTRIES", self.source)
 
-    def test_catalog_binding_releases_dead_registrations(self):
-        publisher = (ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/CatalogPublisher.java").read_text()
-        self.assertIn("releaseBindingLocked()", publisher)
-        self.assertIn("context.unbindService(connection)", publisher)
+    def test_old_binding_bridge_is_removed(self):
+        publisher = ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/CatalogPublisher.java"
+        self.assertFalse(publisher.exists())
 
     def test_each_hook_reports_install_status(self):
         self.assertIn('install("dialogs"', self.source)
