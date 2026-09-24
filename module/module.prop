@@ -1,6 +1,0 @@
-id=telegram_chat_hider
-name=Telegram Chat Hider
-version=v1.3.1
-versionCode=5
-author=cepeter
-description=Hide selected Telegram chats. Reveal with 5 taps on the Telegram header logo. Requires MeowZygisk + APatch.
