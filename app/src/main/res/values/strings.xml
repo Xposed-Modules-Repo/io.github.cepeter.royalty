@@ -8,6 +8,7 @@
     <string name="save">Save</string>
     <string name="suppress_notifications">Suppress new-message notifications for hidden dialogs</string>
     <string name="refresh_hint">Open Telegram to refresh the catalog. Configuration reloads within one second; switch folders or restart Telegram to redraw the list.</string>
+    <string name="catalog_refresh_timeout">No response from Telegram. Open Telegram, then refresh.</string>
     <string name="framework_inactive">Vector or LSPosed is not active for this module. Enable the module, scope Telegram, and restart both apps.</string>
     <string name="save_failed">Configuration could not be saved.</string>
 </resources>

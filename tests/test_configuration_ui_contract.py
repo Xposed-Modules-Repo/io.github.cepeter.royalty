@@ -28,6 +28,19 @@ class ConfigurationUiContractTests(unittest.TestCase):
         self.assertIn("Search, share picker, and new-group screens are not hidden", strings)
         self.assertIn("Open Telegram", strings)
 
+    def test_refresh_requests_catalog_and_observes_completion(self):
+        self.assertIn("CatalogRequestClient.request(this)", self.source)
+        self.assertIn("CatalogProtocol.ACTION_UPDATED", self.source)
+        self.assertIn("registerReceiver", self.source)
+        self.assertIn("unregisterReceiver", self.source)
+        self.assertIn("onPause()", self.source)
+
+    def test_timeout_keeps_cached_rows_and_shows_guidance(self):
+        strings = (ROOT / "app/src/main/res/values/strings.xml").read_text()
+        self.assertIn("loadCatalog", self.source)
+        self.assertIn("postDelayed", self.source)
+        self.assertIn("Open Telegram, then refresh", strings)
+
     def test_missing_selected_dialogs_remain_manageable(self):
         self.assertIn("addMissingSelections", self.source)
         self.assertIn("Unavailable from current catalog", self.source)
