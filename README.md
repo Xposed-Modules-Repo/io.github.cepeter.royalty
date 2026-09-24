@@ -45,7 +45,7 @@ Tap Telegram’s main dialog-list ActionBar five times rapidly to toggle tempora
 - `getDialogs(int)` returns a filtered copy. Telegram’s internal list is never mutated.
 - Notification filtering replaces only the incoming `processNewMessages` list and preserves countdown handling.
 - Configuration uses XSharedPreferences safe-zone redirection.
-- Catalog refresh is initiated by the module app and returned through an exact-component `PendingIntent`; Telegram authenticates the callback creator, and the module accepts only active 128-bit request nonces.
+- Catalog refresh is initiated by the module app through a signature-permission-protected request and returned through an exact-component `PendingIntent`; the module accepts only active 128-bit request nonces.
 - Catalog responses contain only account, dialog ID, and a display title, with at most 1,024 entries per account and 256 UTF-16 code units per title.
 - Hook failures fail open and appear in the module app as `missing` or `runtime_error`.
 

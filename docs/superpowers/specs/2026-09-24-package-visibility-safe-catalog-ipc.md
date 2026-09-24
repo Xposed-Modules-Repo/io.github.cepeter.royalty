@@ -34,7 +34,7 @@ The Xposed entrypoint creates a process-lifetime `CatalogSnapshotStore`. Dialog 
 
 During `ApplicationLoader.onCreate`, injected code dynamically registers an exported broadcast receiver for a private request action. On Android 13 and newer it explicitly uses `Context.RECEIVER_EXPORTED`; older Android versions use the compatible registration overload.
 
-A request is accepted only when it contains a `PendingIntent` whose creator package is exactly `io.github.cepeter.telegramhider`. Invalid or malformed requests are ignored and logged without data.
+A request is accepted only when the sender holds the module app's signature-level request permission and supplies a callback. Invalid or malformed requests are ignored and logged without data.
 
 Telegram responds through the supplied token. It sends one catalog result per account and one status result. This keeps each transaction below Binder's size limit. Every response copies arrays and applies the same catalog/status limits used by persistence.
 
@@ -54,7 +54,7 @@ The callback token is canceled after the response window. Repeated account resul
 
 ## Security properties
 
-- `PendingIntent.getCreatorPackage()` authenticates requests without Telegram querying PackageManager for the module.
+- A signature-level request permission authenticates the sender without Telegram querying PackageManager for the module.
 - The exact callback component and unpredictable nonce limit callback use to the active request.
 - The request broadcast is package-targeted to Telegram, preventing unrelated receivers from obtaining the callback token.
 - The module's result receiver is not directly exported.

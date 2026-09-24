@@ -73,7 +73,7 @@ Hidden keys are strings in the canonical form `<account>:<signed-dialog-id>`. Ac
 
 Telegram keeps bounded account catalogs and hook statuses in process memory. When the module Activity resumes or Refresh is tapped, it sends a package-targeted request containing an exact-component mutable `PendingIntent` callback.
 
-Telegram accepts only callbacks whose creator package is `io.github.cepeter.telegramhider`. The module receiver is not exported and accepts result frames only while their private 128-bit nonce is active. Limits:
+Telegram accepts only requests authorized by the module app's signature-level permission; malformed requests without a callback are rejected. The module receiver is not exported and accepts result frames only while their private 128-bit nonce is active. Limits:
 
 - at most 1,024 dialogs per account response;
 - title length at most 256 Unicode code units;
@@ -109,7 +109,7 @@ The Activity must not show a healthy status unless both required hook points rep
 - No direct ART layout assumptions or native quick-ABI callbacks.
 - No root shell execution.
 - No world-readable chat catalog.
-- Callback creator-package authentication, exact non-exported receiver, and expiring 128-bit request nonces.
+- Signature-permission request authentication, exact non-exported receiver, and expiring 128-bit request nonces.
 - Bounded arrays and strings before persistence.
 - Only IDs and titles are cataloged; no message content.
 - Release dependencies and GitHub Actions are pinned.

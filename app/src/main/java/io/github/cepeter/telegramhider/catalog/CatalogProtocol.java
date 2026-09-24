@@ -3,6 +3,7 @@ package io.github.cepeter.telegramhider.catalog;
 public final class CatalogProtocol {
     public static final String MODULE_PACKAGE = "io.github.cepeter.telegramhider";
     public static final String TELEGRAM_PACKAGE = "org.telegram.messenger";
+    public static final String REQUEST_PERMISSION = MODULE_PACKAGE + ".permission.CATALOG_REQUEST";
     public static final String ACTION_REQUEST = MODULE_PACKAGE + ".action.REQUEST_CATALOG";
     public static final String ACTION_RESULT = MODULE_PACKAGE + ".action.CATALOG_RESULT";
     public static final String ACTION_UPDATED = MODULE_PACKAGE + ".action.CATALOG_UPDATED";

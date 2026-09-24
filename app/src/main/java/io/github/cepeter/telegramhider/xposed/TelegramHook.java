@@ -26,6 +26,7 @@ public final class TelegramHook implements IXposedHookLoadPackage {
     private static final XposedConfigRepository CONFIG = new XposedConfigRepository();
     private static final CatalogSnapshotStore CATALOGS = new CatalogSnapshotStore();
     private static final AtomicBoolean REVEALED = new AtomicBoolean(false);
+    private static final AtomicBoolean RUNTIME_HOOKS_INSTALLED = new AtomicBoolean(false);
     private static final TapSequence TAP_SEQUENCE = new TapSequence(5, 800);
     private static final Map<Integer, Long> LAST_CATALOG_PUBLISH = new LinkedHashMap<>();
 
@@ -40,9 +41,6 @@ public final class TelegramHook implements IXposedHookLoadPackage {
 
         telegramClassLoader = lpparam.classLoader;
         install("bridge", () -> installApplicationBridge(lpparam.classLoader));
-        install("dialogs", () -> installDialogHook(lpparam.classLoader));
-        install("notifications", () -> installNotificationHook(lpparam.classLoader));
-        install("reveal", () -> installRevealHook(lpparam.classLoader));
     }
 
     private static void installApplicationBridge(ClassLoader classLoader) {
@@ -53,14 +51,24 @@ public final class TelegramHook implements IXposedHookLoadPackage {
                 new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        try {
-                            CatalogRequestBridge.register(
-                                    (Context) param.thisObject, CATALOGS);
-                        } catch (RuntimeException error) {
-                            XposedBridge.log("TelegramChatHider: bridge startup failed: " + error);
-                        }
+                        installRuntimeHooks((Context) param.thisObject, classLoader);
                     }
                 });
+    }
+
+    private static void installRuntimeHooks(Context context, ClassLoader classLoader) {
+        if (!RUNTIME_HOOKS_INSTALLED.compareAndSet(false, true)) {
+            return;
+        }
+
+        try {
+            CatalogRequestBridge.register(context, CATALOGS);
+        } catch (RuntimeException error) {
+            XposedBridge.log("TelegramChatHider: bridge startup failed: " + error);
+        }
+        install("dialogs", () -> installDialogHook(classLoader));
+        install("notifications", () -> installNotificationHook(classLoader));
+        install("reveal", () -> installRevealHook(classLoader));
     }
 
     private static void installDialogHook(ClassLoader classLoader) {

@@ -41,6 +41,23 @@ class XposedHookContractTests(unittest.TestCase):
         publisher = ROOT / "app/src/main/java/io/github/cepeter/telegramhider/xposed/CatalogPublisher.java"
         self.assertFalse(publisher.exists())
 
+    def test_telegram_classes_are_resolved_after_application_on_create(self):
+        package_load = self.source[
+            self.source.index("public void handleLoadPackage") :
+            self.source.index("private static void installApplicationBridge")
+        ]
+        self.assertIn('install("bridge"', package_load)
+        self.assertNotIn('install("dialogs"', package_load)
+        self.assertNotIn('install("notifications"', package_load)
+        self.assertNotIn('install("reveal"', package_load)
+
+        application_callback = self.source[
+            self.source.index("protected void afterHookedMethod") :
+            self.source.index("private static void installDialogHook")
+        ]
+        self.assertIn("installRuntimeHooks", application_callback)
+        self.assertIn("compareAndSet(false, true)", self.source)
+
     def test_each_hook_reports_install_status(self):
         self.assertIn('install("dialogs"', self.source)
         self.assertIn('install("notifications"', self.source)

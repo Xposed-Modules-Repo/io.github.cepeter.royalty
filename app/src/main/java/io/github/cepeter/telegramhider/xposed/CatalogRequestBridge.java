@@ -25,7 +25,12 @@ public final class CatalogRequestBridge {
         };
         IntentFilter filter = new IntentFilter(CatalogProtocol.ACTION_REQUEST);
         if (Build.VERSION.SDK_INT >= 33) {
-            applicationContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
+            applicationContext.registerReceiver(
+                    receiver,
+                    filter,
+                    CatalogProtocol.REQUEST_PERMISSION,
+                    null,
+                    Context.RECEIVER_EXPORTED);
         } else {
             registerLegacy(applicationContext, receiver, filter);
         }
@@ -36,15 +41,15 @@ public final class CatalogRequestBridge {
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private static void registerLegacy(
             Context context, BroadcastReceiver receiver, IntentFilter filter) {
-        context.registerReceiver(receiver, filter);
+        context.registerReceiver(
+                receiver, filter, CatalogProtocol.REQUEST_PERMISSION, null);
     }
 
     private static void handleRequest(
             Context context, CatalogSnapshotStore store, Intent request) {
         PendingIntent callback = getCallback(request);
-        if (callback == null
-                || !CatalogProtocol.MODULE_PACKAGE.equals(callback.getCreatorPackage())) {
-            XposedBridge.log("TelegramChatHider: rejected unauthenticated catalog request");
+        if (callback == null) {
+            XposedBridge.log("TelegramChatHider: rejected malformed catalog request");
             return;
         }
 
