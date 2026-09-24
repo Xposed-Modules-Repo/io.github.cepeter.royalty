@@ -1,5 +1,6 @@
 package io.github.cepeter.telegramhider.config;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.SharedPreferences;
 import io.github.cepeter.telegramhider.core.DialogKey;
@@ -15,6 +16,7 @@ public final class ConfigStore {
     private ConfigStore() {}
 
     @SuppressWarnings("deprecation")
+    @SuppressLint("WorldReadableFiles")
     public static SharedPreferences open(Context context) {
         return context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_WORLD_READABLE);
     }

@@ -1,0 +1,41 @@
+import pathlib
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+class CiReleaseContractTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = (ROOT / ".github/workflows/build.yml").read_text()
+        self.gradle = (ROOT / "app/build.gradle.kts").read_text()
+
+    def test_actions_are_sha_pinned(self):
+        shas = (
+            "11d5960a326750d5838078e36cf38b85af677262",
+            "cf277c60eb25467037889841efdb72551f06f6c3",
+            "9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407",
+            "ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "d3f86a106a0bac45b974a628896c90dbdf5c8093",
+            "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65",
+        )
+        for sha in shas:
+            self.assertIn(sha, self.workflow)
+
+    def test_ci_runs_all_gates(self):
+        for gate in ("unittest discover", "testDebugUnitTest", "lintDebug", "assembleDebug", "assembleRelease"):
+            self.assertIn(gate, self.workflow)
+        self.assertIn("contents: read", self.workflow)
+        self.assertIn("contents: write", self.workflow)
+
+    def test_release_uses_secret_backed_signing(self):
+        workflow_secrets = ("TCH_KEYSTORE_B64", "TCH_STORE_PASSWORD", "TCH_KEY_ALIAS", "TCH_KEY_PASSWORD")
+        for secret in workflow_secrets:
+            self.assertIn(secret, self.workflow)
+        for variable in ("TCH_KEYSTORE_FILE", "TCH_STORE_PASSWORD", "TCH_KEY_ALIAS", "TCH_KEY_PASSWORD"):
+            self.assertIn(variable, self.gradle)
+        self.assertNotIn("debug.signingConfig", self.gradle)
+        self.assertIn("startsWith(github.ref, 'refs/tags/v')", self.workflow)
+
+
+if __name__ == "__main__":
+    unittest.main()
