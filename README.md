@@ -1,7 +1,162 @@
+<div align="center">
+
 # Royalty
 
-Hide selected Telegram chats from lists, search, share targets, people pickers, and notifications.
+**Hide selected Telegram chats without changing or deleting them.**
 
-Requires Android 8.1+, Modern Xposed API 101, and official Telegram `versionName 12.10.4` with `versionCode 70992`. Both Telegram identifiers must match.
+[![Latest release](https://img.shields.io/github/v/release/cepeter/Royalty-Telegram-Chat-Hiding?display_name=tag&style=flat-square)](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding/releases/latest)
+![Android 8.1+](https://img.shields.io/badge/Android-8.1%2B-3DDC84?style=flat-square&logo=android&logoColor=white)
+![Telegram 12.10.4](https://img.shields.io/badge/Telegram-12.10.4-26A5E4?style=flat-square&logo=telegram&logoColor=white)
+[![GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding/blob/main/LICENSE)
 
-[Download](https://github.com/Xposed-Modules-Repo/io.github.cepeter.royalty/releases/latest) · [Source and documentation](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding) · [Security](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding/blob/main/SECURITY.md)
+An Xposed module for the official Telegram Android app.
+
+[Download](https://github.com/Xposed-Modules-Repo/io.github.cepeter.royalty/releases/latest) · [Changelog](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding/blob/main/CHANGELOG.md) · [Security](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding/blob/main/SECURITY.md)
+
+</div>
+
+Royalty started as a personal replacement for [Loyalty](https://github.com/Xposed-Modules-Repo/ru.mike.loyalty) after it stopped working on my setup. It keeps chosen chats out of Telegram’s dialog lists, search results, share targets, and people pickers, with optional notification suppression.
+
+> [!IMPORTANT]
+> Royalty supports only official Telegram **12.10.4** (`versionCode 70992`, package `org.telegram.messenger`). Both the displayed version and versionCode must match; other builds are rejected before hooks are installed.
+
+## What it does
+
+- Hides selected chats from the main dialog list and folders.
+- Removes them from local/global search, recent results, messages, forums, and public-post results.
+- Removes them from share targets, contact pickers, new-group, add-member, and invite flows.
+- Can suppress new-message notifications for hidden chats.
+- Lets you reveal hidden chats temporarily with a three-second press and hold.
+- Keeps selections tied to stable Telegram account owners, with account labels, filters, and review of legacy selections.
+- Offers optional re-concealment on background, screen-off, or a 30-second, one-minute, or five-minute timeout.
+- Offers optional device screen-lock confirmation for settings and reveal.
+- Provides hidden-only filtering, selected counts, scoped selection, Undo, Save, and Discard.
+- Exports and imports encrypted, owner-aware configuration backups through Android's document picker.
+- Shows per-surface hook health in the app, so failures are visible instead of silent.
+- Checks GitHub Releases at most once every 24 hours when the app opens and shows a dismissible card when an update is available.
+
+Royalty does not delete chats, modify messages, or change Telegram’s stored dialog list.
+
+## Before you install
+
+| Requirement | Supported version |
+|---|---|
+| Android | 8.1 or newer |
+| Hook framework | Vector/LSPosed with Modern Xposed API 101 support |
+| Telegram | Official app, `versionName 12.10.4`, `versionCode 70992` |
+| Telegram package | `org.telegram.messenger` |
+
+> [!WARNING]
+> Version 2.1.0 uses the new package name `io.github.cepeter.royalty`. It installs separately from older builds using `io.github.cepeter.telegramhider`, and saved selections cannot migrate automatically. Disable and uninstall the old package first to avoid loading two copies of the hook.
+
+## Install
+
+1. Download the latest APK from [LSPosed/Xposed Modules Releases](https://github.com/Xposed-Modules-Repo/io.github.cepeter.royalty/releases/latest).
+2. Install the APK, then enable **Royalty** in Vector or LSPosed.
+3. Scope the module to `org.telegram.messenger`.
+4. Restart your device so the hook framework can activate Royalty inside Telegram.
+5. Open Telegram and leave it running for a few seconds.
+6. Open Royalty, tap **Refresh**, choose the chats to hide, and tap **Save**.
+
+Notification suppression is optional and stays off until you enable it.
+
+## Accounts, privacy, and recovery
+
+Royalty 3.1.0 binds each saved hidden chat to the stable owner ID of its Telegram account. After upgrading an older configuration, legacy selections remain visible for review but do not conceal chats until you explicitly bind them to the displayed account owner and Save. Refresh the catalog with Telegram running, confirm each account label, and review any unavailable selection before changing accounts. A missing or incomplete refresh does not mean an account was logged out. If an account is replaced in the same slot, its predecessor's selections remain recoverable and do not transfer automatically.
+
+Use the account filter, search, or hidden-only view to narrow the list. **Select matching** acts on the visible scope. Undo reverses draft edits; Discard restores the last saved configuration. Save commits the draft only after account ownership is checked again. The diagnostics panel shows the installed and supported Telegram versions, cache age, bridge status, and per-surface health. A fresh check asks Telegram for current observations; it does not perform the [physical-device acceptance matrix](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding/blob/main/docs/device-acceptance-3.1.0.md).
+
+Background re-concealment, screen-off re-concealment, reveal timeout, and device-lock authentication start disabled. Timeout choices are Off, 30 seconds, 1 minute, and 5 minutes. These options govern reveal state; notification suppression is independent. Authentication uses the device's configured screen lock and requires a secure lock to enable. Settings relock after backgrounding, while unsaved draft edits remain available after unlocking.
+
+### Encrypted backups
+
+Tap **Export saved configuration**, enter and confirm a passphrase of at least 12 characters, and choose a document destination. Export reads the **confirmed saved configuration**, so save desired draft edits first. Saved legacy selections without a stable owner are **omitted**; the export prompt and completion count them. Bind those selections to the correct account owner and Save before relying on the backup for migration or reinstall. The backup contains owner IDs, signed dialog IDs, and notification, Local Premium, background, screen-off, and timeout preferences. It excludes chat titles and messages, catalog data, device credentials, authentication enablement, and temporary reveal state. Encryption happens in Royalty before the selected document provider receives bytes. A provider you choose may synchronize the **encrypted file** to a cloud account; keep the passphrase separately.
+
+To restore, tap **Import encrypted backup**, choose the file, and enter its passphrase. Review recognized and skipped owners, new and conflicting selections, and preference changes. Apply edits only the current draft; tap **Save** to persist or **Discard** to cancel. Royalty matches stable owners to current account slots and checks them again at Apply and Save. Unknown or ambiguous owners, conflicting saved bindings, and legacy unbound selections are not silently reassigned. Import preserves existing selections and the current authentication policy. If account ownership changes during the preview, reopen the file and review the new mapping. An interrupted document picker or activity recreation may require restarting the operation.
+
+## Everyday use
+
+Configuration changes are synchronized through the framework's Modern Xposed remote-preferences service. Use the search field to filter the chat picker by title or dialog ID. Switch Telegram folders or restart Telegram if the visible list has not redrawn yet.
+
+To reveal hidden chats temporarily:
+
+1. Open Telegram’s main chat list.
+2. Press and hold the top ActionBar for three seconds.
+3. Release when the reveal message appears.
+
+Repeat the gesture to conceal them again. Reveal mode resets when Telegram restarts and does not turn notification suppression off.
+
+## Support matrix
+
+| Telegram surface | Status |
+|---|:---:|
+| Main dialog list | ✅ Supported |
+| Chat folders | ✅ Supported |
+| New-message notifications | ✅ Supported |
+| Search and global search | ✅ Telegram 12.10.4 |
+| Share and contact pickers | ✅ Telegram 12.10.4 |
+| New group, add member, and contact invite | ✅ Telegram 12.10.4 |
+
+Historical 2.2.0 repository and APK checks are recorded in [`docs/device-acceptance-2.2.0.md`](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding/blob/main/docs/device-acceptance-2.2.0.md). The current 3.1.0 [device acceptance checklist](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding/blob/main/docs/device-acceptance-3.1.0.md) remains pending physical execution; JVM and CI gates alone do not establish live Telegram behavior.
+
+## If something is not working
+
+1. Confirm that Royalty is enabled and scoped only to `org.telegram.messenger`.
+2. Confirm that Telegram reports **versionName 12.10.4** and **versionCode 70992**; both must match.
+3. Restart the device after enabling or updating the module.
+4. Open Telegram before tapping **Refresh** in Royalty.
+5. Check the hook-status cards for `missing` or `runtime_error`.
+
+Hook failures fail open: Telegram keeps showing its normal, unfiltered content instead of crashing or hiding the wrong chats.
+
+<details>
+<summary><strong>Safety and privacy details</strong></summary>
+
+- Vector or LSPosed supplies the ART hook engine; Royalty does not patch ART structures itself.
+- Dialog and notification hooks return filtered copies rather than mutating their inputs.
+- Search surfaces remap visible adapter positions while preserving aligned names and metadata.
+- Share, group, and contact adapters require private-field replacement because Telegram 12.10.4 exposes no return-value hook at those boundaries. Royalty assigns filtered list copies; it never mutates those list instances.
+- Share dialog maps are filtered in place through Telegram's verified map API so Telegram-owned references keep their identity.
+- Configuration uses Modern Xposed remote preferences; it never requests world-readable app files.
+- Catalog requests require a signature-level permission and return through an exact-component `PendingIntent`.
+- Every request uses an active 128-bit nonce.
+- Catalog responses contain only the account, dialog ID, and display title, capped at 1,024 entries per account and 256 UTF-16 code units per title.
+- When Royalty opens, it sends at most one unauthenticated HTTPS request to the official GitHub Releases API every 24 hours. It sends no chat data or device identifier and never downloads or installs an APK automatically.
+
+See [SECURITY.md](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding/blob/main/SECURITY.md) for the threat model and reporting process.
+
+</details>
+
+<details>
+<summary><strong>Build from source</strong></summary>
+
+You need JDK 17 and Android SDK 36.
+
+```bash
+./gradlew testDebugUnitTest lintDebug assembleDebug
+```
+
+Release builds use the four `TCH_*` signing variables configured in GitHub Actions. The tag workflow builds the APK twice, compares deterministic payload entries, verifies the RSA-PSS signature and Xposed metadata, and publishes checksum manifests.
+
+Dependencies are checksum-pinned in `gradle/verification-metadata.xml`. Modern Xposed API 101 is compile-only and is not bundled in the APK; its API-101 service client is packaged for framework-backed remote preferences.
+
+### Project layout
+
+```text
+app/src/main/java/.../core/      Filtering, validation, backup codec and import logic
+app/src/main/java/.../xposed/    Vector/LSPosed hooks and request bridge
+app/src/main/java/.../catalog/   Nonce-validated callback transport and private storage
+app/src/main/java/.../config/    Safe preference writer
+app/src/main/java/.../update/    Bounded GitHub release check and metadata validation
+app/src/test/                    JVM contract tests
+```
+
+</details>
+
+## Compatibility notes
+
+The runtime aliases are checked directly against the official Telegram **12.10.4** APK (`versionCode 70992`, SHA-256 `146ec03c20ce4c73ccfa12399f143c0db5992a3419d30ec0f17ef547b3eaba8d`). Telegram source commit [`9552e554`](https://github.com/DrKLO/Telegram/commit/9552e5541e1274b9557c9832b204dbfcaf44b3dc) is used only as a readable reference. Check Royalty’s hook-status panel after every Telegram update.
+
+## License
+
+Royalty is licensed under [GPL-3.0](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding/blob/main/LICENSE). Third-party notices are listed in [NOTICE.md](https://github.com/cepeter/Royalty-Telegram-Chat-Hiding/blob/main/NOTICE.md).
